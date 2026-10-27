@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "core/log.h"
+#include "vfs/survey.h"
 
 namespace ember::app {
 
@@ -50,6 +51,11 @@ bool Engine::Startup(const Config& config) {
     for (const std::string& problem : archive_errors) {
         // Includes the first bytes of the index so a wrong format assumption can be diagnosed.
         EMBER_WARN("Archive problem: %s", problem.c_str());
+    }
+    // Structural self-check of the mounted archives against the user's real files. Reads only
+    // small samples, writes counts to the log, never copies content anywhere.
+    for (const std::string& line : vfs::SurveyArchives(vfs_.Archives())) {
+        EMBER_LOG("%s", line.c_str());
     }
     game_found_.store(true);
     EMBER_LOG("Startup finished in %.2f s",

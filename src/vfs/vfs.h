@@ -47,6 +47,9 @@ public:
     [[nodiscard]] std::size_t ArchiveCount() const noexcept {
         return archives_.size();
     }
+    [[nodiscard]] const std::vector<Bhd5Archive>& Archives() const noexcept {
+        return archives_;
+    }
     /// Total number of packed files across all mounted archives (listed by hash only).
     [[nodiscard]] std::size_t PackedFileCount() const noexcept;
 

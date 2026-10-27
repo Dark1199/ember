@@ -16,7 +16,8 @@ else()
     set(EMBER_ZLIB ZLIB::ZLIB)
 endif()
 
-add_library(ember_core STATIC src/vfs/vfs.cpp src/vfs/bhd5.cpp src/vfs/dcx.cpp src/vfs/bnd.cpp)
+add_library(ember_core STATIC src/vfs/vfs.cpp src/vfs/bhd5.cpp src/vfs/dcx.cpp src/vfs/bnd.cpp
+    src/vfs/survey.cpp)
 target_link_libraries(ember_core PUBLIC ${EMBER_ZLIB})
 target_include_directories(ember_core PUBLIC src)
 
@@ -34,6 +35,9 @@ if(EMBER_BUILD_TESTS)
     add_executable(bnd_test tests/bnd_test.cpp)
     target_link_libraries(bnd_test PRIVATE ember_core)
     add_test(NAME bnd_test COMMAND bnd_test)
+    add_executable(survey_test tests/survey_test.cpp)
+    target_link_libraries(survey_test PRIVATE ember_core)
+    add_test(NAME survey_test COMMAND survey_test)
 endif()
 
 if(ANDROID)
