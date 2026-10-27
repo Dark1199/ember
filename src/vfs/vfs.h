@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "vfs/bhd5.h"
+#include "vfs/dcx.h"
 
 namespace ember::vfs {
 
@@ -49,6 +50,12 @@ public:
     [[nodiscard]] bool Exists(std::string_view path) const;
     [[nodiscard]] std::optional<std::uintmax_t> Size(std::string_view path) const;
     [[nodiscard]] std::optional<std::vector<std::byte>> ReadAll(std::string_view path) const;
+
+    /// Like ReadAll, but a file wrapped in a compressed container (DCX) is decompressed first.
+    /// Files that are not wrapped come back unchanged. A wrapped file that fails to decompress
+    /// yields nullopt and the reason in `error`.
+    [[nodiscard]] std::optional<std::vector<std::byte>> ReadAllDecoded(
+        std::string_view path, std::string* error = nullptr) const;
 
     /// Normalized paths whose key starts with `prefix` (itself normalized), sorted.
     [[nodiscard]] std::vector<std::string> List(std::string_view prefix = {}) const;

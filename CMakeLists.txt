@@ -8,7 +8,16 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(EMBER_BUILD_TESTS "Build host-side unit tests" OFF)
 
 # Platform independent code (no Vulkan, no Android headers).
-add_library(ember_core STATIC src/vfs/vfs.cpp src/vfs/bhd5.cpp)
+# zlib: provided by the NDK on Android (libz), found on the host for tests.
+if(ANDROID)
+    set(EMBER_ZLIB z)
+else()
+    find_package(ZLIB REQUIRED)
+    set(EMBER_ZLIB ZLIB::ZLIB)
+endif()
+
+add_library(ember_core STATIC src/vfs/vfs.cpp src/vfs/bhd5.cpp src/vfs/dcx.cpp)
+target_link_libraries(ember_core PUBLIC ${EMBER_ZLIB})
 target_include_directories(ember_core PUBLIC src)
 
 if(EMBER_BUILD_TESTS)
@@ -19,6 +28,9 @@ if(EMBER_BUILD_TESTS)
     add_executable(bhd5_test tests/bhd5_test.cpp)
     target_link_libraries(bhd5_test PRIVATE ember_core)
     add_test(NAME bhd5_test COMMAND bhd5_test)
+    add_executable(dcx_test tests/dcx_test.cpp)
+    target_link_libraries(dcx_test PRIVATE ember_core)
+    add_test(NAME dcx_test COMMAND dcx_test)
 endif()
 
 if(ANDROID)

@@ -180,6 +180,19 @@ std::optional<std::vector<std::byte>> Vfs::ReadAll(std::string_view path) const 
     return data;
 }
 
+std::optional<std::vector<std::byte>> Vfs::ReadAllDecoded(std::string_view path,
+                                                          std::string* error) const {
+    auto raw = ReadAll(path);
+    if (!raw) {
+        if (error) *error = "file not found or unreadable";
+        return std::nullopt;
+    }
+    if (!IsDcx(*raw)) {
+        return raw;
+    }
+    return DecompressDcx(*raw, error);
+}
+
 std::vector<std::string> Vfs::List(std::string_view prefix) const {
     const std::string key = Normalize(prefix);
     std::vector<std::string> result;
