@@ -25,8 +25,13 @@ namespace ember::vfs {
 //   entry (stride depends on the format flags):
 //     u8 flags, 3 pad, i32 stored size, u32 (or i64) data offset,
 //     [i32 id] [u32 name offset] [i32 uncompressed size]
-//   Because BND3 stores no entry stride, the long-offset bit is cross-checked against the file:
-//   if the flag-derived layout does not fit the file, the opposite choice is tried.
+//   BND3 stores no entry stride, and real files show that the flag bits above do not reliably
+//   describe the table (every Dark Souls bundle checked so far carries 0x74, which contradicts
+//   them). The parser therefore tries the flag-derived layout first, then every combination of
+//   {long offsets, ids, compression field} with the names field kept as the flags say, and takes
+//   the first one whose whole table validates: every data range inside the file and after the
+//   table, every name inside the file and after the table, and (preferred) inside the declared
+//   end-of-headers. `layout_corrected` is set when the choice differs from the flag-derived one.
 //
 // BND4 (64-byte header, entry stride stored in the header)
 //   0x00 "BND4"   0x09 u8 big-endian   0x0C i32 file count   0x10 i64 header size (0x40)
@@ -59,6 +64,11 @@ struct BndIndex {
     bool unicode_names = false;
     bool long_offsets = false;      // the layout that actually parsed
     bool layout_corrected = false;  // BND3 only: flags disagreed with the file; see above
+    bool has_ids = false;           // BND3: the entry layout that actually parsed
+    bool has_names = false;
+    bool has_compression_field = false;
+    std::uint32_t entry_stride = 0; // bytes per entry in the table (BND3: derived, BND4: stored)
+    bool header_end_consistent = false; // BND3: names lie inside the declared end-of-headers
     std::uint8_t format_flags = 0;
     std::string version;
     std::vector<BndEntry> entries;

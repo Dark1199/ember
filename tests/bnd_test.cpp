@@ -289,6 +289,42 @@ int main() {
         CheckSample(b->Index(), false, true);
     }
 
+    // Real bundles carry flags 0x74 whatever their table looks like. Build several table shapes,
+    // overwrite the flag byte with 0x74, and require the parser to find the shape from the data.
+    {
+        struct Shape { std::uint8_t table_flags; bool long_offsets; bool ids; std::uint32_t stride; };
+        const Shape shapes[] = {
+            {0x04, false, false, 16}, {0x06, false, true, 20}, {0x24, false, false, 20},
+            {0x26, false, true, 24},  {0x14, true, false, 20},  {0x36, true, true, 28},
+        };
+        for (const Shape& shape : shapes) {
+            Bytes file = BuildBnd3(items, shape.table_flags, false, shape.long_offsets);
+            file[0x0C] = std::byte{0x74};
+            auto archive = BndArchive::Open(file, nullptr);
+            assert(archive);
+            const BndIndex& idx = archive->Index();
+            assert(idx.entry_stride == shape.stride);
+            assert(idx.header_end_consistent);
+            if (shape.table_flags == 0x14) {
+                // 64-bit offsets below 4 GiB read identically to 32-bit offsets followed by an
+                // id column holding 0: the bytes cannot tell them apart. Offsets, sizes and names
+                // come out the same either way, only the id field differs.
+                assert(idx.entries.size() == 3 && idx.entries[2].name == "readme.txt");
+            } else {
+                assert(idx.long_offsets == shape.long_offsets && idx.has_ids == shape.ids);
+                CheckSample(idx, shape.ids, true);
+            }
+            assert(Str(archive->Raw(idx.entries[0])) == "flver-bytes-0123456789");
+        }
+        // A table that fits no layout still fails cleanly (here: names point into the table).
+        Bytes broken = BuildBnd3(items, 0x06, false, false);
+        broken[0x0C] = std::byte{0x74};
+        for (std::size_t i = 0x20; i < 0x20 + 3 * 20; ++i) broken[i] = std::byte{0x01};
+        std::string error;
+        assert(!BndArchive::Open(broken, &error));
+        assert(error.find("no entry layout fits") != std::string::npos);
+    }
+
     // BND4 little endian, ASCII names, ids, stride larger than the fields need.
     {
         const Bytes file = BuildBnd4(items, 0x2E, false, false, 8);

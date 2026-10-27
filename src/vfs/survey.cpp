@@ -153,17 +153,34 @@ void SurveyOne(const Bhd5Archive& archive, std::vector<std::string>& out) {
 
     std::uint64_t budget = kSampleByteBudget;
     std::size_t bnd_ok = 0, bnd_fail = 0, bnd_corrected = 0, bnd_entries = 0;
-    std::string first_bnd_error;
+    std::string first_bnd_error, first_bnd_dump;
+    std::map<std::string, std::size_t> layouts;
     const auto check_bnd = [&](std::span<const std::byte> bytes) {
         std::string err;
         if (auto idx = ParseBnd(bytes, &err)) {
             ++bnd_ok;
             bnd_corrected += idx->layout_corrected ? 1 : 0;
             bnd_entries += idx->entries.size();
+            char key[160];
+            std::snprintf(key, sizeof(key),
+                          "BND%c flags 0x%02x -> stride %u ids %d names %d comp %d long %d%s",
+                          idx->kind == BndKind::Bnd3 ? '3' : '4', idx->format_flags,
+                          idx->entry_stride, idx->has_ids, idx->has_names,
+                          idx->has_compression_field, idx->long_offsets,
+                          idx->kind == BndKind::Bnd3 && !idx->header_end_consistent
+                              ? " (names outside declared header end)" : "");
+            ++layouts[key];
         } else {
             ++bnd_fail;
             if (first_bnd_error.empty()) {
                 first_bnd_error = err;
+                // Header plus the first entries, as hex, so the real layout can be read off.
+                for (std::size_t i = 0; i < std::min<std::size_t>(bytes.size(), 160); ++i) {
+                    char h[4];
+                    std::snprintf(h, sizeof(h), "%02x ", static_cast<unsigned>(bytes[i]));
+                    first_bnd_dump += h;
+                    if (i % 16 == 15) first_bnd_dump += "| ";
+                }
             }
         }
     };
@@ -220,8 +237,12 @@ void SurveyOne(const Bhd5Archive& archive, std::vector<std::string>& out) {
                       ", failed " + std::to_string(bnd_fail) + ", layout-corrected " +
                       std::to_string(bnd_corrected) + ", " + std::to_string(bnd_entries) +
                       " bundle entries in total");
+        if (!layouts.empty()) {
+            out.push_back(tag + "BND layouts that parsed: " + TopList(layouts, 6));
+        }
         if (!first_bnd_error.empty()) {
             out.push_back(tag + "first BND failure: " + first_bnd_error);
+            out.push_back(tag + "first failing bundle, first 160 bytes (16 per group): " + first_bnd_dump);
         }
     }
 }

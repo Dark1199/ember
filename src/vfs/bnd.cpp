@@ -142,10 +142,11 @@ bool InFile(std::span<const std::byte> bytes, std::uint64_t offset, std::uint64_
     return offset <= bytes.size() && size <= bytes.size() - offset;
 }
 
+// `header_end` != 0 additionally requires the table and every name to lie below it.
 std::optional<std::vector<BndEntry>> ReadBnd3Entries(std::span<const std::byte> bytes,
                                                      const io::ByteView& view,
                                                      std::uint64_t count, const FormatBits& bits,
-                                                     std::string* why) {
+                                                     std::uint64_t header_end, std::string* why) {
     const std::uint64_t stride = 8 + (bits.long_offsets ? 8 : 4) + (bits.ids ? 4 : 0) +
                                  (bits.names ? 4 : 0) + (bits.compression ? 4 : 0);
     if (count > (bytes.size() - kBnd3HeaderSize) / stride) {
@@ -153,6 +154,10 @@ std::optional<std::vector<BndEntry>> ReadBnd3Entries(std::span<const std::byte> 
         return std::nullopt;
     }
     const std::uint64_t table_end = kBnd3HeaderSize + count * stride;
+    if (header_end != 0 && table_end > header_end) {
+        *why = "entry table runs past the declared end of headers";
+        return std::nullopt;
+    }
     std::vector<BndEntry> entries;
     entries.reserve(static_cast<std::size_t>(count));
     for (std::uint64_t i = 0; i < count; ++i) {
@@ -202,6 +207,10 @@ std::optional<std::vector<BndEntry>> ReadBnd3Entries(std::span<const std::byte> 
             *why = "entry " + std::to_string(i) + ": points back into the entry table";
             return std::nullopt;
         }
+        if (bits.names && header_end != 0 && name_offset >= header_end) {
+            *why = "entry " + std::to_string(i) + ": name lies beyond the declared end of headers";
+            return std::nullopt;
+        }
         if (bits.names && !ReadCString(bytes, name_offset, e.name)) {
             *why = "entry " + std::to_string(i) + ": bad name";
             return std::nullopt;
@@ -231,25 +240,74 @@ std::optional<BndIndex> ParseBnd3(std::span<const std::byte> bytes, std::string*
         return Fail(error, "BND3: bad entry count", bytes);
     }
 
-    FormatBits bits = DecodeFormat(flags);
-    std::string why_first;
-    auto entries = ReadBnd3Entries(bytes, view, static_cast<std::uint64_t>(count), bits, &why_first);
-    if (!entries) {
-        // The stride is not stored in BND3, so a wrong long-offset assumption shows up as an
-        // entry table that does not fit. Retry once with the opposite choice.
-        FormatBits flipped = bits;
-        flipped.long_offsets = !bits.long_offsets;
-        std::string why_second;
-        entries = ReadBnd3Entries(bytes, view, static_cast<std::uint64_t>(count), flipped,
-                                  &why_second);
-        if (!entries) {
-            return Fail(error, "BND3: " + why_first + "; with the opposite offset width: " + why_second,
-                        bytes);
+    std::int32_t header_end_field = 0;
+    (void)view.Read(0x14, header_end_field);
+    const std::uint64_t header_end = header_end_field > 0 ? static_cast<std::uint64_t>(header_end_field) : 0;
+
+    const FormatBits declared = DecodeFormat(flags);
+    // Candidate layouts: flag-derived first, then the opposite offset width, then the rest.
+    std::vector<FormatBits> candidates;
+    const auto add = [&](bool ids, bool comp, bool long_offsets) {
+        const FormatBits c{ids, declared.names, comp, long_offsets};
+        for (const FormatBits& have : candidates) {
+            if (have.ids == c.ids && have.compression == c.compression &&
+                have.long_offsets == c.long_offsets) {
+                return;
+            }
         }
-        bits = flipped;
-        index.layout_corrected = true;
+        candidates.push_back(c);
+    };
+    add(declared.ids, declared.compression, declared.long_offsets);
+    add(declared.ids, declared.compression, !declared.long_offsets);
+    for (const bool long_offsets : {false, true}) {
+        for (const bool comp : {false, true}) {
+            for (const bool ids : {false, true}) {
+                add(ids, comp, long_offsets);
+            }
+        }
     }
-    index.long_offsets = bits.long_offsets;
+
+    std::optional<std::vector<BndEntry>> entries;
+    FormatBits chosen = declared;
+    std::string why_first;
+    bool header_end_ok = false;
+    // Pass 0 insists the names fit the declared end-of-headers; pass 1 drops that requirement
+    // in case the field means something else in some files.
+    for (int pass = 0; pass < 2 && !entries; ++pass) {
+        if (pass == 0 && header_end == 0) {
+            continue;
+        }
+        for (const FormatBits& candidate : candidates) {
+            std::string why;
+            auto parsed = ReadBnd3Entries(bytes, view, static_cast<std::uint64_t>(count), candidate,
+                                          pass == 0 ? header_end : 0, &why);
+            if (parsed) {
+                entries = std::move(parsed);
+                chosen = candidate;
+                header_end_ok = pass == 0;
+                break;
+            }
+            if (why_first.empty()) {
+                why_first = why; // the reason the flag-derived layout was rejected
+            }
+        }
+    }
+    if (!entries) {
+        return Fail(error, "BND3: no entry layout fits this file (flag-derived layout: " + why_first +
+                               "); count " + std::to_string(count) + ", declared end of headers " +
+                               std::to_string(header_end),
+                    bytes);
+    }
+    index.layout_corrected = chosen.ids != declared.ids || chosen.compression != declared.compression ||
+                             chosen.long_offsets != declared.long_offsets;
+    index.long_offsets = chosen.long_offsets;
+    index.has_ids = chosen.ids;
+    index.has_names = chosen.names;
+    index.has_compression_field = chosen.compression;
+    index.header_end_consistent = header_end_ok;
+    index.entry_stride = static_cast<std::uint32_t>(8 + (chosen.long_offsets ? 8 : 4) +
+                                                    (chosen.ids ? 4 : 0) + (chosen.names ? 4 : 0) +
+                                                    (chosen.compression ? 4 : 0));
     index.entries = std::move(*entries);
     return index;
 }
@@ -284,6 +342,10 @@ std::optional<BndIndex> ParseBnd4(std::span<const std::byte> bytes, std::string*
     index.format_flags = flags;
     const FormatBits bits = DecodeFormat(flags);
     index.long_offsets = bits.long_offsets;
+    index.has_ids = bits.ids;
+    index.has_names = bits.names;
+    index.has_compression_field = bits.compression;
+    index.entry_stride = static_cast<std::uint32_t>(stride);
 
     const std::int64_t needed = 8 + 8 + (bits.compression ? 8 : 0) + (bits.long_offsets ? 8 : 4) +
                                 (bits.ids ? 4 : 0) + (bits.names ? 4 : 0);
