@@ -1,5 +1,7 @@
 # Ember
 
+Licensed under the GNU General Public License v3.0 or later (see `LICENSE`).
+
 An open-source, from-scratch game engine for ARM64 Android (Vulkan 1.1, tuned for tile-based
 GPUs such as the Adreno 612). Like OpenMW, it ships **no game data**: you copy your own legitimate
 installation onto the device and the engine reads it at runtime. See `CLEANROOM.md` for the

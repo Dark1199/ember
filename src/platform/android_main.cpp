@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0-or-later
 // NativeActivity entry point: owns the Android lifecycle and connects the window to the renderer.
 #include <android/native_activity.h>
 #include <android/native_window.h>
