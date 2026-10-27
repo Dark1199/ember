@@ -1,0 +1,16 @@
+build/
+.gradle/
+android/local.properties
+android/gradlew
+android/gradlew.bat
+android/gradle/wrapper/
+android/app/build/
+.cxx/
+*.apk
+# Never commit game data of any kind.
+/game/
+*.bdt
+*.bhd
+*.dcx
+*.bnd
+*.exe
