@@ -18,6 +18,12 @@ Ember is an original engine. It reads game data the user already owns; it ships 
 6. **Third-party code** (renderers, math, formats libraries) must have a compatible license and
    is recorded in `THIRD_PARTY.md`.
 
+7. **No third-party artwork or branding.** No box art, cover images, logos, screenshots from the
+   game, fonts or sounds taken from it, and nothing derived from them (recoloured, cropped or
+   redrawn), in the app icon, the UI, the README or anywhere else in the repository. The icon and
+   all UI graphics are drawn for Ember. If a user wants a personal image in their own copy, it is
+   loaded from their device at runtime and never committed.
+
 These rules are a working discipline, not legal advice. Before publishing, have someone qualified
 review the project, particularly around trademarks (do not use the original game's name or logo
 in the project's name or branding).
