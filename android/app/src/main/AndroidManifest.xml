@@ -3,21 +3,33 @@
     <!-- Vulkan 1.1 (0x401000). The Adreno 612 does not offer 1.2. -->
     <uses-feature android:name="android.hardware.vulkan.version" android:version="0x401000" android:required="true" />
 
+    <!-- No storage permission: the game zip is chosen with the system file picker and the game
+         files are written to the app's own external files folder. -->
     <application
         android:label="Ember"
-        android:hasCode="false"
+        android:icon="@mipmap/ic_launcher"
         android:allowBackup="false">
+
+        <!-- Launcher: install game files, status, live log, start the engine. -->
         <activity
-            android:name="android.app.NativeActivity"
+            android:name=".MainActivity"
             android:exported="true"
-            android:screenOrientation="sensorLandscape"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode"
-            android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
-            <meta-data android:name="android.app.lib_name" android:value="ember" />
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+        </activity>
+
+        <!-- The engine itself; started from the launcher. -->
+        <activity
+            android:name="android.app.NativeActivity"
+            android:exported="false"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|uiMode"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+            <meta-data android:name="android.app.lib_name" android:value="ember" />
         </activity>
     </application>
 </manifest>

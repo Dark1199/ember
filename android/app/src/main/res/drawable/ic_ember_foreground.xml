@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Original Ember mark: a flame with a bright core. Drawn for this project. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#E8650A"
+        android:pathData="M54,24 C62,37 75,45 75,62 C75,75 66,84 54,84 C42,84 33,75 33,62 C33,52 39,47 44,39 C46,45 49,47 52,47 C52,39 52,33 54,24 Z" />
+    <path
+        android:fillColor="#FFC24A"
+        android:pathData="M54,51 C59,58 65,62 65,70 C65,77 60,81 54,81 C48,81 43,77 43,70 C43,63 49,59 54,51 Z" />
+</vector>

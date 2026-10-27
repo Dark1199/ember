@@ -23,6 +23,22 @@ What exists today:
 - `src/platform/android_main.cpp` NativeActivity entry point and window lifecycle.
 - CI builds the host tests and a debug APK (untested on a device so far).
 
+## Launcher (install, status, live log)
+
+The app opens on a small launcher screen built from plain Android views:
+
+- **Install game .zip** opens the system file picker (no storage permission needed). The zip is
+  streamed with the platform's zlib (`java.util.zip`) and only `*.bhd5`, `*.bhd`, `*.bdt` and
+  `DARKSOULS.exe` are copied, flat, into `Android/data/org.ember.engine/files/game/`. Entry
+  directories are never used, so a malicious zip cannot write outside that folder. Files are
+  written to `.part` first, so a cancelled or failed install leaves no half-written file.
+- The console under the buttons follows `ember.log` live (installer lines and the engine's
+  BHD5/BND/DCX output), so nothing has to be fetched from the storage folder by hand.
+- **Launch** starts the native engine.
+
+The icon is an original flame mark drawn for this project. No game artwork is shipped (see
+CLEANROOM.md).
+
 ## Providing your game files
 
 Copy your installation into the app's private folder, `Android/data/org.ember.engine/files/game/`

@@ -11,6 +11,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y zlib1g-dev
+      - name: Java tests (zip installer, log tail)
+        run: |
+          mkdir -p /tmp/jt
+          J=android/app/src/main/java/org/ember/engine
+          javac -Xlint:all -d /tmp/jt $J/ZipInstaller.java $J/LogTail.java tests/java/EmberJavaTests.java
+          java -cp /tmp/jt org.ember.engine.EmberJavaTests
       - run: cmake -S . -B build -DEMBER_BUILD_TESTS=ON
       - run: cmake --build build
       - run: ctest --test-dir build --output-on-failure
