@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -15,6 +16,8 @@
 #include "vfs/dcx.h"
 
 namespace ember::vfs {
+
+class BndArchive;
 
 /// Read-only virtual file system over user-supplied game directories.
 ///
@@ -56,6 +59,12 @@ public:
     /// yields nullopt and the reason in `error`.
     [[nodiscard]] std::optional<std::vector<std::byte>> ReadAllDecoded(
         std::string_view path, std::string* error = nullptr) const;
+
+    /// Reads `path` (decompressing a DCX wrapper if present) and opens it as a BND3/BND4 bundle.
+    /// The returned archive owns the one decoded buffer; entries are viewed in place. Hold on to
+    /// it while reading several entries instead of calling this repeatedly.
+    [[nodiscard]] std::shared_ptr<const BndArchive> OpenBnd(std::string_view path,
+                                                            std::string* error = nullptr) const;
 
     /// Normalized paths whose key starts with `prefix` (itself normalized), sorted.
     [[nodiscard]] std::vector<std::string> List(std::string_view prefix = {}) const;

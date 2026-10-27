@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <atomic>
 #include <filesystem>
 #include <string>
 
@@ -37,12 +38,18 @@ public:
         return vfs_;
     }
     [[nodiscard]] bool GameFound() const noexcept {
-        return game_found_;
+        return game_found_.load();
+    }
+    /// True until Startup has finished. Startup may run on a worker thread while Frame runs on
+    /// the render thread; Files() must only be used once this is false.
+    [[nodiscard]] bool Loading() const noexcept {
+        return loading_.load();
     }
 
 private:
     vfs::Vfs vfs_;
-    bool game_found_ = false;
+    std::atomic<bool> game_found_{false};
+    std::atomic<bool> loading_{true};
     double time_ = 0.0;
 };
 

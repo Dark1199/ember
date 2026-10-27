@@ -16,7 +16,7 @@ else()
     set(EMBER_ZLIB ZLIB::ZLIB)
 endif()
 
-add_library(ember_core STATIC src/vfs/vfs.cpp src/vfs/bhd5.cpp src/vfs/dcx.cpp)
+add_library(ember_core STATIC src/vfs/vfs.cpp src/vfs/bhd5.cpp src/vfs/dcx.cpp src/vfs/bnd.cpp)
 target_link_libraries(ember_core PUBLIC ${EMBER_ZLIB})
 target_include_directories(ember_core PUBLIC src)
 
@@ -31,6 +31,9 @@ if(EMBER_BUILD_TESTS)
     add_executable(dcx_test tests/dcx_test.cpp)
     target_link_libraries(dcx_test PRIVATE ember_core)
     add_test(NAME dcx_test COMMAND dcx_test)
+    add_executable(bnd_test tests/bnd_test.cpp)
+    target_link_libraries(bnd_test PRIVATE ember_core)
+    add_test(NAME bnd_test COMMAND bnd_test)
 endif()
 
 if(ANDROID)
@@ -41,7 +44,8 @@ if(ANDROID)
     add_library(ember SHARED
         src/platform/android_main.cpp
         src/gfx/renderer.cpp
-        src/app/engine.cpp)
+        src/app/engine.cpp
+        src/core/crash.cpp)
     target_compile_definitions(ember PRIVATE VK_USE_PLATFORM_ANDROID_KHR=1)
     target_link_libraries(ember PRIVATE ember_core native_app_glue android log vulkan)
     # Keep the glue's entry point from being stripped.

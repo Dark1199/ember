@@ -118,3 +118,15 @@ std::optional<std::vector<std::byte>> DecompressDcx(std::span<const std::byte> b
 }
 
 } // namespace ember::vfs
+
+namespace ember::vfs {
+
+std::optional<std::vector<std::byte>> DecodeIfDcx(std::span<const std::byte> bytes,
+                                                  std::string* error) {
+    if (IsDcx(bytes)) {
+        return DecompressDcx(bytes, error);
+    }
+    return std::vector<std::byte>(bytes.begin(), bytes.end());
+}
+
+} // namespace ember::vfs

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "vfs/vfs.h"
 
+#include "vfs/bnd.h"
+
 #include <algorithm>
 #include <fstream>
 #include <set>
@@ -191,6 +193,18 @@ std::optional<std::vector<std::byte>> Vfs::ReadAllDecoded(std::string_view path,
         return raw;
     }
     return DecompressDcx(*raw, error);
+}
+
+std::shared_ptr<const BndArchive> Vfs::OpenBnd(std::string_view path, std::string* error) const {
+    auto bytes = ReadAllDecoded(path, error);
+    if (!bytes) {
+        return nullptr;
+    }
+    auto archive = BndArchive::Open(std::move(*bytes), error);
+    if (!archive) {
+        return nullptr;
+    }
+    return std::make_shared<const BndArchive>(std::move(*archive));
 }
 
 std::vector<std::string> Vfs::List(std::string_view prefix) const {

@@ -29,12 +29,20 @@ Copy your installation into the app's private folder, `Android/data/org.ember.en
 (or write a different absolute path on the first line of `files/game_root.txt`). The log prints the
 mounted file count and top-level entries.
 
+## Diagnostics (no adb needed)
+
+The app writes `Android/data/org.ember.engine/files/ember.log` (the previous run is kept as
+`ember.log.prev`), including a backtrace if it crashes natively. Screen colours when something
+fails before the renderer can draw: magenta = no Vulkan instance, orange = surface or swapchain
+creation failed. If the screen is black and `ember.log` does not exist at all, the native library
+never started (check the APK's `arm64-v8a` library and the device's Vulkan 1.1 support).
+
 ## Milestones (honest scope)
 
 | M | Goal |
 |---|------|
 | 0 | Boot, Vulkan clear, mount game folder (this scaffold) |
-| 1 | Archive/container readers written from documented formats; `docs/formats/` (split archives done, compressed and bundled containers next) |
+| 1 | Archive/container readers written from documented formats; `docs/formats/` (split archives, DCX/zlib and BND3/BND4 bundles written, unverified against real files) |
 | 2 | Shader pipeline (GLSL to SPIR-V at build time), first textured mesh from game data |
 | 3 | Map geometry, camera, free-fly through a level |
 | 4 | Character skeleton and animation playback |

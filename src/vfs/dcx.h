@@ -43,6 +43,11 @@ inline constexpr std::uint64_t kMaxDecompressedSize = 1ull << 30; // 1 GiB
                                                                 std::uint64_t expected_size,
                                                                 std::string* error);
 
+/// Returns the bytes unchanged (copied) when they are not DCX, otherwise the decompressed bytes.
+/// This is the single decode step shared by Vfs::ReadAllDecoded and container entry reads.
+[[nodiscard]] std::optional<std::vector<std::byte>> DecodeIfDcx(std::span<const std::byte> bytes,
+                                                                std::string* error);
+
 /// Decompresses a DCX file held in memory.
 [[nodiscard]] std::optional<std::vector<std::byte>> DecompressDcx(std::span<const std::byte> bytes,
                                                                   std::string* error);
