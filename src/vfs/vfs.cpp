@@ -78,14 +78,79 @@ bool Vfs::MountDirectory(const std::filesystem::path& root, std::string* error) 
     return true;
 }
 
+bool Vfs::MountArchive(const std::filesystem::path& index_path,
+                       const std::filesystem::path& data_path, std::string* error) {
+    auto archive = Bhd5Archive::Open(index_path, data_path, error);
+    if (!archive) {
+        return false;
+    }
+    archives_.push_back(std::move(*archive));
+    return true;
+}
+
+std::size_t Vfs::MountArchivesFromIndex(std::vector<std::string>* errors) {
+    // Collect first: mounting does not change index_, but keep the scan and the work separate.
+    std::vector<std::pair<std::filesystem::path, std::filesystem::path>> pairs;
+    for (const auto& [key, entry] : index_) {
+        std::string_view stem;
+        if (key.ends_with(".bhd5")) {
+            stem = std::string_view(key).substr(0, key.size() - 5);
+        } else if (key.ends_with(".bhd")) {
+            stem = std::string_view(key).substr(0, key.size() - 4);
+        } else {
+            continue;
+        }
+        const auto data = index_.find(std::string(stem) + ".bdt");
+        if (data == index_.end()) {
+            if (errors) errors->push_back(key + ": no matching .bdt next to it");
+            continue;
+        }
+        pairs.emplace_back(entry.real_path, data->second.real_path);
+    }
+    std::ranges::sort(pairs); // deterministic order, independent of hash-map iteration
+    std::size_t mounted = 0;
+    for (const auto& [index_path, data_path] : pairs) {
+        std::string error;
+        if (MountArchive(index_path, data_path, &error)) {
+            ++mounted;
+        } else if (errors) {
+            errors->push_back(error);
+        }
+    }
+    return mounted;
+}
+
+std::size_t Vfs::PackedFileCount() const noexcept {
+    std::size_t total = 0;
+    for (const Bhd5Archive& archive : archives_) {
+        total += archive.Index().entries.size();
+    }
+    return total;
+}
+
+std::pair<const Bhd5Archive*, const Bhd5Entry*> Vfs::FindPacked(
+    std::string_view path) const noexcept {
+    const std::uint32_t hash = PathHash(path);
+    for (auto it = archives_.rbegin(); it != archives_.rend(); ++it) {
+        if (const Bhd5Entry* entry = it->Find(hash)) {
+            return {&*it, entry};
+        }
+    }
+    return {nullptr, nullptr};
+}
+
 bool Vfs::Exists(std::string_view path) const {
-    return index_.contains(Normalize(path));
+    return index_.contains(Normalize(path)) || FindPacked(path).first != nullptr;
 }
 
 std::optional<std::uintmax_t> Vfs::Size(std::string_view path) const {
     const auto it = index_.find(Normalize(path));
     if (it == index_.end()) {
-        return std::nullopt;
+        const auto [archive, entry] = FindPacked(path);
+        if (!archive) {
+            return std::nullopt;
+        }
+        return entry->stored_size;
     }
     return it->second.size;
 }
@@ -93,7 +158,11 @@ std::optional<std::uintmax_t> Vfs::Size(std::string_view path) const {
 std::optional<std::vector<std::byte>> Vfs::ReadAll(std::string_view path) const {
     const auto it = index_.find(Normalize(path));
     if (it == index_.end()) {
-        return std::nullopt;
+        const auto [archive, entry] = FindPacked(path);
+        if (!archive) {
+            return std::nullopt;
+        }
+        return archive->Read(*entry);
     }
     std::ifstream file(it->second.real_path, std::ios::binary | std::ios::ate);
     if (!file) {

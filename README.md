@@ -12,6 +12,9 @@ rules that keep the code original.
 What exists today:
 
 - `src/vfs/` case-insensitive virtual file system over your game folder (host-tested).
+- `src/vfs/bhd5.*` M1: split archive reader (index `.bhd5`/`.bhd` plus data `.bdt`), mounted
+  automatically; packed files are found by path hash. Written from documented layout and tested on
+  synthetic archives only, **not yet verified against real files**.
 - `src/gfx/renderer.*` Vulkan 1.1 startup: instance, device, swapchain with display pre-rotation,
   a single tiler-friendly render pass (colour stored, depth transient and never stored),
   2 frames in flight, swapchain recreation when the Android window is lost and regained.
@@ -31,7 +34,7 @@ mounted file count and top-level entries.
 | M | Goal |
 |---|------|
 | 0 | Boot, Vulkan clear, mount game folder (this scaffold) |
-| 1 | Archive/container readers written from documented formats; `docs/formats/` |
+| 1 | Archive/container readers written from documented formats; `docs/formats/` (split archives done, compressed and bundled containers next) |
 | 2 | Shader pipeline (GLSL to SPIR-V at build time), first textured mesh from game data |
 | 3 | Map geometry, camera, free-fly through a level |
 | 4 | Character skeleton and animation playback |

@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include <fstream>
+#include <vector>
 
 #include "core/log.h"
 
@@ -34,6 +35,14 @@ bool Engine::Startup(const Config& config) {
     EMBER_LOG("Mounted %zu files", vfs_.FileCount());
     for (const std::string& name : vfs_.TopLevel()) {
         EMBER_LOG("  top level: %s", name.c_str());
+    }
+
+    std::vector<std::string> archive_errors;
+    const std::size_t archives = vfs_.MountArchivesFromIndex(&archive_errors);
+    EMBER_LOG("Mounted %zu archive(s), %zu packed files", archives, vfs_.PackedFileCount());
+    for (const std::string& problem : archive_errors) {
+        // Includes the first bytes of the index so a wrong format assumption can be diagnosed.
+        EMBER_WARN("Archive problem: %s", problem.c_str());
     }
     return true;
 }

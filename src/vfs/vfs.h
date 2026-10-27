@@ -8,7 +8,10 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
+
+#include "vfs/bhd5.h"
 
 namespace ember::vfs {
 
@@ -26,6 +29,22 @@ public:
     /// Indexes every regular file below `root`. Returns false (and fills `error`) if the
     /// directory cannot be read.
     bool MountDirectory(const std::filesystem::path& root, std::string* error = nullptr);
+
+    /// Mounts one index/data archive pair. Packed files are looked up by path hash; loose files
+    /// always win over packed ones, and later-mounted archives win over earlier ones.
+    bool MountArchive(const std::filesystem::path& index_path,
+                      const std::filesystem::path& data_path, std::string* error = nullptr);
+
+    /// Mounts every ".bhd5" / ".bhd" file found among the loose files that has a ".bdt" with the
+    /// same name next to it (names are matched case-insensitively). Returns how many mounted;
+    /// the reason for each failure is appended to `errors`.
+    std::size_t MountArchivesFromIndex(std::vector<std::string>* errors = nullptr);
+
+    [[nodiscard]] std::size_t ArchiveCount() const noexcept {
+        return archives_.size();
+    }
+    /// Total number of packed files across all mounted archives (listed by hash only).
+    [[nodiscard]] std::size_t PackedFileCount() const noexcept;
 
     [[nodiscard]] bool Exists(std::string_view path) const;
     [[nodiscard]] std::optional<std::uintmax_t> Size(std::string_view path) const;
@@ -49,7 +68,11 @@ private:
         std::filesystem::path real_path;
         std::uintmax_t size = 0;
     };
+    [[nodiscard]] std::pair<const Bhd5Archive*, const Bhd5Entry*> FindPacked(
+        std::string_view path) const noexcept;
+
     std::unordered_map<std::string, Entry> index_;
+    std::vector<Bhd5Archive> archives_; ///< mount order; searched newest first
 };
 
 } // namespace ember::vfs
