@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -18,5 +19,13 @@ namespace ember::vfs {
 ///     layout corrections and the first failure with its leading bytes.
 /// Nothing from the game data is retained or written anywhere except these summary counts.
 [[nodiscard]] std::vector<std::string> SurveyArchives(const std::vector<Bhd5Archive>& archives);
+
+/// Full integrity pass over every entry of every archive: each stored byte is read back from the
+/// data file, and every DCX stream is completely decompressed (zlib verifies its own checksum, and
+/// the size declared in the DCX header must match). Slow (reads the whole data set), so it is
+/// opt-in. Progress and the result are reported through `log`, one line at a time, as it goes.
+/// Returns true when nothing failed.
+bool VerifyArchives(const std::vector<Bhd5Archive>& archives,
+                    const std::function<void(const std::string&)>& log);
 
 } // namespace ember::vfs

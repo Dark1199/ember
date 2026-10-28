@@ -170,6 +170,16 @@ void android_main(android_app* app) {
     // processed and the app shows its grey "loading" frame immediately.
     ember::app::Config config;
     config.game_root = ember::app::LocateGameRoot(files_dir);
+    // The launcher's "Verify files" button drops this marker; it is consumed so the slow pass
+    // runs once per request.
+    {
+        std::error_code ec;
+        const std::filesystem::path marker = files_dir / "verify.request";
+        if (std::filesystem::exists(marker, ec)) {
+            config.verify_archives = true;
+            std::filesystem::remove(marker, ec);
+        }
+    }
     state.startup = std::thread([&state, config] { state.engine.Startup(config); });
 
     auto last = std::chrono::steady_clock::now();

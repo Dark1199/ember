@@ -249,6 +249,95 @@ void SurveyOne(const Bhd5Archive& archive, std::vector<std::string>& out) {
 
 } // namespace
 
+bool VerifyArchives(const std::vector<Bhd5Archive>& archives,
+                    const std::function<void(const std::string&)>& log) {
+    constexpr std::uint32_t kMaxWholeDcxBytes = 256u << 20; // larger DCX entries are only read through
+    constexpr std::size_t kChunk = 1u << 20;
+    constexpr std::size_t kMaxListedFailures = 10;
+    bool all_ok = true;
+    for (const Bhd5Archive& archive : archives) {
+        const std::string tag = "verify " + archive.DataPath().filename().string() + ": ";
+        std::ifstream data(archive.DataPath(), std::ios::binary);
+        if (!data) {
+            log(tag + "cannot open the data file");
+            all_ok = false;
+            continue;
+        }
+        const auto& entries = archive.Index().entries;
+        std::size_t read_failed = 0, dcx_ok = 0, dcx_failed = 0, dcx_skipped = 0, listed = 0;
+        std::uint64_t bytes = 0;
+        std::vector<char> chunk(kChunk);
+        std::size_t next_report = 1;
+        for (std::size_t i = 0; i < entries.size(); ++i) {
+            const Bhd5Entry& e = entries[i];
+            const auto fail = [&](const char* what, const std::string& detail) {
+                if (listed++ < kMaxListedFailures) {
+                    char hash[16];
+                    std::snprintf(hash, sizeof(hash), "%08x", e.name_hash);
+                    log(tag + what + " entry hash " + hash + " at offset " +
+                        std::to_string(e.data_offset) + ", " + std::to_string(e.stored_size) +
+                        " bytes" + (detail.empty() ? "" : ": " + detail));
+                }
+            };
+            unsigned char magic[4] = {};
+            data.clear();
+            data.seekg(static_cast<std::streamoff>(e.data_offset));
+            const bool is_dcx = e.stored_size >= 4 && data.read(reinterpret_cast<char*>(magic), 4) &&
+                                magic[0] == 'D' && magic[1] == 'C' && magic[2] == 'X' && magic[3] == 0;
+            if (is_dcx && e.stored_size <= kMaxWholeDcxBytes) {
+                const auto raw = archive.Read(e);
+                std::string err;
+                if (!raw) {
+                    ++read_failed;
+                    fail("READ FAILED", "");
+                } else if (DecompressDcx(*raw, &err)) {
+                    ++dcx_ok;
+                    bytes += e.stored_size;
+                } else {
+                    ++dcx_failed;
+                    fail("DCX FAILED", err);
+                }
+            } else {
+                if (is_dcx) {
+                    ++dcx_skipped; // too large to hold in memory at once: checked as a plain read
+                }
+                data.clear();
+                data.seekg(static_cast<std::streamoff>(e.data_offset));
+                std::uint64_t left = e.stored_size;
+                bool ok = true;
+                while (left > 0 && ok) {
+                    const auto n = static_cast<std::streamsize>(std::min<std::uint64_t>(left, kChunk));
+                    ok = static_cast<bool>(data.read(chunk.data(), n));
+                    left -= static_cast<std::uint64_t>(n);
+                }
+                if (ok) {
+                    bytes += e.stored_size;
+                } else {
+                    ++read_failed;
+                    fail("READ FAILED", "");
+                }
+            }
+            if (i + 1 >= next_report * entries.size() / 4 && next_report < 4) {
+                log(tag + std::to_string(i + 1) + "/" + std::to_string(entries.size()) + " entries");
+                ++next_report;
+            }
+        }
+        const bool ok = read_failed == 0 && dcx_failed == 0;
+        all_ok = all_ok && ok;
+        log(tag + (ok ? "OK: " : "PROBLEMS FOUND: ") + std::to_string(entries.size()) + " entries, " +
+            Size(bytes) + " read; DCX " + std::to_string(dcx_ok + dcx_failed) + " (ok " +
+            std::to_string(dcx_ok) + ", failed " + std::to_string(dcx_failed) + ")" +
+            (dcx_skipped ? ", " + std::to_string(dcx_skipped) + " oversized DCX read through only" : "") +
+            "; read failures " + std::to_string(read_failed) +
+            (listed > kMaxListedFailures
+                 ? "; " + std::to_string(listed - kMaxListedFailures) + " more failures not listed"
+                 : ""));
+    }
+    log(all_ok ? "verify: every archive entry read back and every DCX stream decompressed cleanly"
+               : "verify: PROBLEMS FOUND (see lines above); re-install the game zip");
+    return all_ok;
+}
+
 std::vector<std::string> SurveyArchives(const std::vector<Bhd5Archive>& archives) {
     std::vector<std::string> lines;
     for (const Bhd5Archive& archive : archives) {

@@ -259,6 +259,10 @@ std::optional<BndIndex> ParseBnd3(std::span<const std::byte> bytes, std::string*
     };
     add(declared.ids, declared.compression, declared.long_offsets);
     add(declared.ids, declared.compression, !declared.long_offsets);
+    // The rest, widest entries first: a table whose entries really are wide also validates as a
+    // narrower one when it holds a single entry, and the wider reading keeps more information
+    // (ids, uncompressed size). Real tables with two or more entries only validate as themselves.
+    const std::size_t fixed = candidates.size();
     for (const bool long_offsets : {false, true}) {
         for (const bool comp : {false, true}) {
             for (const bool ids : {false, true}) {
@@ -266,6 +270,11 @@ std::optional<BndIndex> ParseBnd3(std::span<const std::byte> bytes, std::string*
             }
         }
     }
+    const auto width = [](const FormatBits& c) {
+        return (c.long_offsets ? 8 : 4) + (c.ids ? 4 : 0) + (c.compression ? 4 : 0);
+    };
+    std::stable_sort(candidates.begin() + static_cast<std::ptrdiff_t>(fixed), candidates.end(),
+                     [&](const FormatBits& a, const FormatBits& b) { return width(a) > width(b); });
 
     std::optional<std::vector<BndEntry>> entries;
     FormatBits chosen = declared;

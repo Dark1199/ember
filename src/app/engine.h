@@ -13,6 +13,8 @@ namespace ember::app {
 struct Config {
     /// Directory the user copied their own game installation into.
     std::filesystem::path game_root;
+    /// Run the slow full integrity check of every archive entry after mounting.
+    bool verify_archives = false;
 };
 
 /// Picks the game directory. `external_files_dir` is the app's private external storage

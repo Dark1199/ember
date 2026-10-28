@@ -140,6 +140,22 @@ int main() {
     assert(Has(lines, "first DCX failure:"));
     assert(Has(lines, "BND sample (plain or inside DCX): parsed 2, failed 0, layout-corrected 0, 2 bundle entries"));
 
+    // Full verification: the corrupt DCX entry must be reported, the rest read back cleanly.
+    {
+        auto again = Bhd5Archive::Open(dir / "t.bhd5", dir / "t.bdt", &error);
+        assert(again);
+        std::vector<std::string> log;
+        std::vector<Bhd5Archive> one;
+        one.push_back(std::move(*again));
+        const bool ok = VerifyArchives(one, [&](const std::string& l) { log.push_back(l); });
+        for (const auto& l : log) std::puts(l.c_str());
+        assert(!ok);
+        assert(Has(log, "DCX FAILED entry hash"));
+        assert(Has(log, "PROBLEMS FOUND: 4 entries"));
+        assert(Has(log, "DCX 2 (ok 1, failed 1)"));
+        assert(Has(log, "verify: PROBLEMS FOUND"));
+    }
+
     fs::remove_all(dir);
     std::puts("survey_test: ok");
     return 0;

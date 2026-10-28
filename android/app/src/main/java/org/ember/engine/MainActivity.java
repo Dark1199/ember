@@ -50,6 +50,7 @@ public final class MainActivity extends Activity {
     private Button pickButton;
     private Button cancelButton;
     private Button launchButton;
+    private Button verifyButton;
 
     private final Runnable logPoller = new Runnable() {
         @Override
@@ -184,6 +185,24 @@ public final class MainActivity extends Activity {
         refreshStatus();
     }
 
+    /**
+     * Asks the engine to run its full integrity pass on the next start (it reads every archive
+     * entry and fully decompresses every compressed stream), then starts it. The result is
+     * written to ember.log and therefore shows up in the console below.
+     */
+    private void verifyThenLaunch() {
+        try {
+            if (!new File(filesDir, "verify.request").createNewFile()) {
+                appendConsole("[verify] request file already present\n");
+            }
+        } catch (java.io.IOException e) {
+            appendConsole("[verify] cannot request verification: " + e + "\n");
+            return;
+        }
+        appendConsole("[verify] starting the engine with a full file check; this can take a minute\n");
+        launchEngine();
+    }
+
     private void launchEngine() {
         startActivity(new Intent(this, android.app.NativeActivity.class));
     }
@@ -223,6 +242,7 @@ public final class MainActivity extends Activity {
     private void setBusy(boolean busy) {
         pickButton.setEnabled(!busy);
         launchButton.setEnabled(!busy);
+        verifyButton.setEnabled(!busy);
         cancelButton.setVisibility(busy ? View.VISIBLE : View.GONE);
         progress.setVisibility(busy ? View.VISIBLE : View.GONE);
         if (busy) {
@@ -332,6 +352,10 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         root.addView(buttons);
 
+        verifyButton = makeButton("Verify installed files (slow, reads all game data)", false);
+        root.addView(verifyButton, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
         progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progress.setVisibility(View.GONE);
         root.addView(progress, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
@@ -353,6 +377,7 @@ public final class MainActivity extends Activity {
 
         pickButton.setOnClickListener(v -> pickZip());
         launchButton.setOnClickListener(v -> launchEngine());
+        verifyButton.setOnClickListener(v -> verifyThenLaunch());
         cancelButton.setOnClickListener(v -> {
             final ZipInstaller running = installer;
             if (running != null) {

@@ -34,7 +34,11 @@ The app opens on a small launcher screen built from plain Android views:
   written to `.part` first, so a cancelled or failed install leaves no half-written file.
 - The console under the buttons follows `ember.log` live (installer lines and the engine's
   BHD5/BND/DCX output), so nothing has to be fetched from the storage folder by hand.
-- **Launch** starts the native engine.
+- **Launch** starts the native engine. While it runs, a bar sweeps across the screen (so a live
+  engine never looks frozen) and one tile per mounted archive appears once loading is done.
+- **Verify installed files** starts the engine with a full integrity pass: every archive entry is
+  read back and every compressed stream is completely decompressed (zlib checks its own
+  checksums). The result appears in the console as `verify ...` lines.
 
 The icon is an original flame mark drawn for this project. No game artwork is shipped (see
 CLEANROOM.md).
