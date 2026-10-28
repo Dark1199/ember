@@ -15,6 +15,8 @@ struct Config {
     std::filesystem::path game_root;
     /// Run the slow full integrity check of every archive entry after mounting.
     bool verify_archives = false;
+    /// Where the verification result is written (empty: not written).
+    std::filesystem::path verify_report;
 };
 
 /// Picks the game directory. `external_files_dir` is the app's private external storage

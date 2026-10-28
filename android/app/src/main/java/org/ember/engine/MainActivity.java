@@ -235,8 +235,29 @@ public final class MainActivity extends Activity {
                 }
             }
         }
-        status.setText(String.format(Locale.ROOT, "Game files: %d index, %d data  •  %s",
-                indexes, data, indexes > 0 && data > 0 ? "ready" : "not installed"));
+        status.setText(String.format(Locale.ROOT, "Game files: %d index, %d data  •  %s%s",
+                indexes, data, indexes > 0 && data > 0 ? "ready" : "not installed",
+                lastVerifyResult()));
+    }
+
+    /** Last line of the kept verification report, e.g. "verify: every archive entry ... cleanly". */
+    private String lastVerifyResult() {
+        final File report = new File(filesDir, "verify_result.txt");
+        if (!report.isFile() || report.length() > 256 * 1024) {
+            return "";
+        }
+        String last = "";
+        try (java.io.BufferedReader in = new java.io.BufferedReader(new java.io.FileReader(report))) {
+            String line;
+            while ((line = in.readLine()) != null) {
+                if (line.startsWith("verify: ")) {
+                    last = line;
+                }
+            }
+        } catch (java.io.IOException ignored) {
+            return "";
+        }
+        return last.isEmpty() ? "" : "\n" + (last.length() > 90 ? last.substring(0, 90) + "..." : last);
     }
 
     private void setBusy(boolean busy) {
@@ -352,7 +373,7 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         root.addView(buttons);
 
-        verifyButton = makeButton("Verify installed files (slow, reads all game data)", false);
+        verifyButton = makeButton("Verify installed files (slow: full check of all game data)", false);
         root.addView(verifyButton, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 

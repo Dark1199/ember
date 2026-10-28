@@ -177,6 +177,7 @@ void android_main(android_app* app) {
         const std::filesystem::path marker = files_dir / "verify.request";
         if (std::filesystem::exists(marker, ec)) {
             config.verify_archives = true;
+            config.verify_report = files_dir / "verify_result.txt";
             std::filesystem::remove(marker, ec);
         }
     }

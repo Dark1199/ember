@@ -53,20 +53,38 @@ bool Engine::Startup(const Config& config) {
         // Includes the first bytes of the index so a wrong format assumption can be diagnosed.
         EMBER_WARN("Archive problem: %s", problem.c_str());
     }
-    // Structural self-check of the mounted archives against the user's real files. Reads only
-    // small samples, writes counts to the log, never copies content anywhere.
-    for (const std::string& line : vfs::SurveyArchives(vfs_.Archives())) {
-        EMBER_LOG("%s", line.c_str());
-    }
-    if (config.verify_archives) {
-        EMBER_LOG("verify: full integrity pass requested; this reads all game data");
-        vfs::VerifyArchives(vfs_.Archives(), [](const std::string& line) {
-            EMBER_LOG("%s", line.c_str());
-        });
-    }
+    // Boot is done here: mounting only reads the small index files (about 10 ms for the four
+    // archives). Entry tables of bundles are read when a bundle is opened, so nothing else has to
+    // be analysed up front, and no cache is needed.
     game_found_.store(true);
-    EMBER_LOG("Startup finished in %.2f s",
+    if (!config.verify_archives) {
+        loading_.store(false);
+    }
+    EMBER_LOG("Startup finished in %.3f s",
               std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
+
+    if (config.verify_archives) {
+        // Opt-in and slow (reads all game data). Everything below only reads the mounted
+        // archives, so the render thread keeps running; the screen stays in its "busy" state
+        // until the check has finished.
+        EMBER_LOG("verify: structural survey and full integrity pass requested");
+        std::string report;
+        const auto emit = [&report](const std::string& line) {
+            EMBER_LOG("%s", line.c_str());
+            report += line + "\n";
+        };
+        for (const std::string& line : vfs::SurveyArchives(vfs_.Archives())) {
+            emit(line);
+        }
+        vfs::VerifyArchives(vfs_.Archives(), emit);
+        if (!config.verify_report.empty()) {
+            // Its own file: ember.log is replaced on every launch, this one is kept until the
+            // next verification so the launcher can show the last result.
+            std::ofstream(config.verify_report, std::ios::trunc) << report;
+        }
+        EMBER_LOG("verify: finished in %.1f s",
+                  std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
+    }
     return true;
 }
 

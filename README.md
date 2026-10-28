@@ -36,9 +36,13 @@ The app opens on a small launcher screen built from plain Android views:
   BHD5/BND/DCX output), so nothing has to be fetched from the storage folder by hand.
 - **Launch** starts the native engine. While it runs, a bar sweeps across the screen (so a live
   engine never looks frozen) and one tile per mounted archive appears once loading is done.
-- **Verify installed files** starts the engine with a full integrity pass: every archive entry is
+- Plain **Launch** does no analysis: mounting reads only the small index files (about 10 ms for
+  the four archives) and the first frame is on screen about 60 ms after the engine starts.
+- **Verify installed files** starts the engine with the structural survey and a full integrity pass: every archive entry is
   read back and every compressed stream is completely decompressed (zlib checks its own
-  checksums). The result appears in the console as `verify ...` lines.
+  checksums). The result appears in the console as `verify ...` lines, and the last result is kept in
+  `verify_result.txt` (the launcher shows it under the title) because `ember.log` is replaced on
+  every launch.
 
 The icon is an original flame mark drawn for this project. No game artwork is shipped (see
 CLEANROOM.md).
