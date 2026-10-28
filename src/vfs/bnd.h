@@ -74,6 +74,65 @@ struct BndIndex {
     std::vector<BndEntry> entries;
 };
 
+// ---------------------------------------------------------------------------------------------
+// Split bundles ("BHF3" header file + "BDF3" data file). A BHF3 is a BND3 header without the data:
+// the same 32-byte header (no end-of-headers field) and the same entry table, but every entry's
+// offset and size refer to the paired BDF3 file, which starts with a 16-byte header ("BDF3" and a
+// version string) and holds the raw entry bytes. The entry-table layout is inferred exactly as
+// for BND3 (see above); the names stay in the header file.
+// ---------------------------------------------------------------------------------------------
+struct BxfIndex {
+    bool big_endian = false;
+    bool long_offsets = false;
+    bool layout_corrected = false;
+    bool has_ids = false;
+    bool has_names = false;
+    bool has_compression_field = false;
+    std::uint8_t format_flags = 0;
+    std::uint32_t entry_stride = 0;
+    std::string version;
+    std::uint64_t data_extent = 0; ///< end of the furthest entry; the BDF3 must be at least this long
+    std::vector<BndEntry> entries; ///< offsets/sizes address the BDF3 file
+};
+
+[[nodiscard]] bool IsBhf3(std::span<const std::byte> bytes) noexcept;
+
+/// Parses a BHF3 header file. `data_size` is the size of the paired BDF3 when known; every entry
+/// must then lie inside it. Without it only the header itself can be validated (offsets are
+/// capped at 4 GiB).
+[[nodiscard]] std::optional<BxfIndex> ParseBhf3(std::span<const std::byte> header,
+                                                std::optional<std::uint64_t> data_size,
+                                                std::string* error);
+
+/// An opened split bundle: header index plus the paired BDF3 data, both held in memory. Entries
+/// are views into the data buffer; names are looked up exactly as in BndArchive.
+class SplitBundle {
+public:
+    /// Takes ownership of both buffers (a DCX wrapper around either is removed first). Fails if
+    /// the data does not start with "BDF3" or is shorter than the header says it must be.
+    [[nodiscard]] static std::optional<SplitBundle> Open(std::vector<std::byte> header,
+                                                         std::vector<std::byte> data,
+                                                         std::string* error);
+
+    [[nodiscard]] const BxfIndex& Index() const noexcept {
+        return index_;
+    }
+    [[nodiscard]] std::size_t Count() const noexcept {
+        return index_.entries.size();
+    }
+    [[nodiscard]] const BndEntry* Find(std::string_view name) const;
+    [[nodiscard]] std::span<const std::byte> Raw(const BndEntry& entry) const noexcept;
+    [[nodiscard]] std::optional<std::vector<std::byte>> Read(const BndEntry& entry,
+                                                             std::string* error) const;
+
+private:
+    SplitBundle(std::vector<std::byte> data, BxfIndex index);
+
+    std::vector<std::byte> data_;
+    BxfIndex index_;
+    std::unordered_map<std::string, std::uint32_t> by_name_;
+};
+
 /// True when the bytes start with "BND3" or "BND4".
 [[nodiscard]] bool IsBnd(std::span<const std::byte> bytes) noexcept;
 

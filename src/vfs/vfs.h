@@ -18,6 +18,7 @@
 namespace ember::vfs {
 
 class BndArchive;
+class SplitBundle;
 
 /// Read-only virtual file system over user-supplied game directories.
 ///
@@ -68,6 +69,12 @@ public:
     /// it while reading several entries instead of calling this repeatedly.
     [[nodiscard]] std::shared_ptr<const BndArchive> OpenBnd(std::string_view path,
                                                             std::string* error = nullptr) const;
+
+    /// Opens a split bundle: `header_path` (BHF3) and `data_path` (BDF3), each decoded if wrapped
+    /// in DCX. The result owns both buffers.
+    [[nodiscard]] std::shared_ptr<const SplitBundle> OpenSplitBundle(std::string_view header_path,
+                                                                     std::string_view data_path,
+                                                                     std::string* error = nullptr) const;
 
     /// Normalized paths whose key starts with `prefix` (itself normalized), sorted.
     [[nodiscard]] std::vector<std::string> List(std::string_view prefix = {}) const;

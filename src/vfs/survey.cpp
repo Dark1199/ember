@@ -6,14 +6,18 @@
 #include <fstream>
 #include <map>
 
+#include "formats/flver.h"
 #include "vfs/bnd.h"
 #include "vfs/dcx.h"
+#include "vfs/vfs.h"
 
 namespace ember::vfs {
 namespace {
 
 constexpr std::size_t kDcxSampleLimit = 24;
 constexpr std::size_t kBndSampleLimit = 12;
+constexpr std::size_t kBxfSampleLimit = 16;
+constexpr std::size_t kFlverSampleLimit = 60;
 constexpr std::uint32_t kMaxSampleEntryBytes = 16u << 20;
 constexpr std::uint64_t kSampleByteBudget = 64ull << 20;
 constexpr std::size_t kTopMagics = 8;
@@ -124,7 +128,8 @@ void SurveyOne(const Bhd5Archive& archive, std::vector<std::string>& out) {
     out.emplace_back(line);
 
     std::map<std::string, std::size_t> magics;
-    std::vector<const Bhd5Entry*> dcx_candidates, bnd_candidates;
+    std::vector<const Bhd5Entry*> dcx_candidates, bnd_candidates, bhf_candidates;
+    std::vector<std::uint32_t> bdf_sizes; // stored sizes of BDF3 data files, for pairing
     for (const Bhd5Entry& e : index.entries) {
         if (e.stored_size < 4) {
             ++shorter_than_magic;
@@ -144,7 +149,12 @@ void SurveyOne(const Bhd5Archive& archive, std::vector<std::string>& out) {
                 dcx_candidates.push_back(&e);
             } else if ((key == "BND3" || key == "BND4") && bnd_candidates.size() < kBndSampleLimit) {
                 bnd_candidates.push_back(&e);
+            } else if (key == "BHF3" && bhf_candidates.size() < kBxfSampleLimit) {
+                bhf_candidates.push_back(&e);
             }
+        }
+        if (key == "BDF3") {
+            bdf_sizes.push_back(e.stored_size);
         }
     }
     out.push_back(tag + "first 4 bytes of entries: " + TopList(magics, kTopMagics) +
@@ -152,6 +162,46 @@ void SurveyOne(const Bhd5Archive& archive, std::vector<std::string>& out) {
                                       : ""));
 
     std::uint64_t budget = kSampleByteBudget;
+    std::size_t flver_ok = 0, flver_fail = 0;
+    std::map<std::string, std::size_t> flver_versions, flver_index_bits, flver_order;
+    std::uint32_t flver_min[6], flver_max[6] = {};
+    std::fill(std::begin(flver_min), std::end(flver_min), 0xFFFFFFFFu);
+    float flver_extent_max = 0.0f;
+    std::string first_flver_error, first_flver_dump;
+    const auto check_flver = [&](std::span<const std::byte> bytes) {
+        if (flver_ok + flver_fail >= kFlverSampleLimit) {
+            return;
+        }
+        std::string err;
+        if (const auto h = formats::ParseFlverHeader(bytes, &err)) {
+            ++flver_ok;
+            char v[16];
+            std::snprintf(v, sizeof(v), "0x%x", h->version);
+            ++flver_versions[v];
+            ++flver_index_bits[std::to_string(h->vertex_index_bits)];
+            ++flver_order[h->big_endian ? "big" : "little"];
+            const std::uint32_t values[6] = {h->mesh_count, h->material_count, h->bone_count,
+                                             h->face_count, h->vertex_buffer_count, h->texture_count};
+            for (int i = 0; i < 6; ++i) {
+                flver_min[i] = std::min(flver_min[i], values[i]);
+                flver_max[i] = std::max(flver_max[i], values[i]);
+            }
+            for (int i = 0; i < 3; ++i) {
+                flver_extent_max = std::max(flver_extent_max, h->bounds_max[i] - h->bounds_min[i]);
+            }
+        } else {
+            ++flver_fail;
+            if (first_flver_error.empty()) {
+                first_flver_error = err;
+                for (std::size_t i = 0; i < std::min<std::size_t>(bytes.size(), 96); ++i) {
+                    char h[4];
+                    std::snprintf(h, sizeof(h), "%02x ", static_cast<unsigned>(bytes[i]));
+                    first_flver_dump += h;
+                    if (i % 16 == 15) first_flver_dump += "| ";
+                }
+            }
+        }
+    };
     std::size_t bnd_ok = 0, bnd_fail = 0, bnd_corrected = 0, bnd_entries = 0;
     std::string first_bnd_error, first_bnd_dump;
     std::map<std::string, std::size_t> layouts;
@@ -170,6 +220,14 @@ void SurveyOne(const Bhd5Archive& archive, std::vector<std::string>& out) {
                           idx->kind == BndKind::Bnd3 && !idx->header_end_consistent
                               ? " (names outside declared header end)" : "");
             ++layouts[key];
+            for (const BndEntry& e : idx->entries) {
+                if (e.name.size() >= 6 && e.stored_size >= 6 && e.offset <= bytes.size() &&
+                    e.stored_size <= bytes.size() - e.offset &&
+                    Vfs::Normalize(e.name).ends_with(".flver")) {
+                    check_flver(bytes.subspan(static_cast<std::size_t>(e.offset),
+                                              static_cast<std::size_t>(e.stored_size)));
+                }
+            }
         } else {
             ++bnd_fail;
             if (first_bnd_error.empty()) {
@@ -214,6 +272,8 @@ void SurveyOne(const Bhd5Archive& archive, std::vector<std::string>& out) {
             ++decoded[Magic(*inflated)];
             if (IsBnd(*inflated)) {
                 check_bnd(*inflated);
+            } else if (formats::IsFlver(*inflated)) {
+                check_flver(*inflated);
             }
         }
         out.push_back(tag + "DCX sample " + std::to_string(sampled) + ": ok " + std::to_string(ok) +
@@ -230,6 +290,76 @@ void SurveyOne(const Bhd5Archive& archive, std::vector<std::string>& out) {
         budget -= e->stored_size;
         if (const auto raw = archive.Read(*e)) {
             check_bnd(*raw);
+        }
+    }
+    // Split bundles: BHF3 header files. Their data lives in a BDF3 file whose name is not known
+    // here (entries are listed by hash only), so pairing is judged by size: a BDF3 whose stored
+    // size is at least the header's furthest entry end, and no more than 64 bytes above it.
+    if (!bhf_candidates.empty()) {
+        std::size_t ok = 0, fail = 0, paired = 0, entries_total = 0;
+        std::map<std::string, std::size_t> bxf_layouts;
+        std::string first_error, first_dump;
+        for (const Bhd5Entry* e : bhf_candidates) {
+            if (e->stored_size > budget) {
+                break;
+            }
+            budget -= e->stored_size;
+            const auto raw = archive.Read(*e);
+            if (!raw) {
+                continue;
+            }
+            std::string err;
+            if (const auto idx = ParseBhf3(*raw, std::nullopt, &err)) {
+                ++ok;
+                entries_total += idx->entries.size();
+                char key[160];
+                std::snprintf(key, sizeof(key), "BHF3 flags 0x%02x -> stride %u ids %d names %d comp %d long %d",
+                              idx->format_flags, idx->entry_stride, idx->has_ids, idx->has_names,
+                              idx->has_compression_field, idx->long_offsets);
+                ++bxf_layouts[key];
+                for (const std::uint32_t size : bdf_sizes) {
+                    if (size >= idx->data_extent && size - idx->data_extent <= 64) {
+                        ++paired;
+                        break;
+                    }
+                }
+            } else {
+                ++fail;
+                if (first_error.empty()) {
+                    first_error = err;
+                    for (std::size_t i = 0; i < std::min<std::size_t>(raw->size(), 160); ++i) {
+                        char h[4];
+                        std::snprintf(h, sizeof(h), "%02x ", static_cast<unsigned>((*raw)[i]));
+                        first_dump += h;
+                        if (i % 16 == 15) first_dump += "| ";
+                    }
+                }
+            }
+        }
+        out.push_back(tag + "BHF3 sample: parsed " + std::to_string(ok) + ", failed " + std::to_string(fail) +
+                      ", " + std::to_string(entries_total) + " entries; " + std::to_string(paired) +
+                      " have a size-matching BDF3 in this archive (" + std::to_string(bdf_sizes.size()) +
+                      " BDF3 files); layouts " + TopList(bxf_layouts, 4));
+        if (!first_error.empty()) {
+            out.push_back(tag + "first BHF3 failure: " + first_error);
+            out.push_back(tag + "first failing BHF3, first 160 bytes (16 per group): " + first_dump);
+        }
+    }
+    if (flver_ok + flver_fail > 0) {
+        char range[300];
+        std::snprintf(range, sizeof(range),
+                      "meshes %u..%u, materials %u..%u, bones %u..%u, faces %u..%u, vertex buffers %u..%u, "
+                      "textures %u..%u, largest bounding-box side %.1f",
+                      flver_min[0], flver_max[0], flver_min[1], flver_max[1], flver_min[2], flver_max[2],
+                      flver_min[3], flver_max[3], flver_min[4], flver_max[4], flver_min[5], flver_max[5],
+                      static_cast<double>(flver_extent_max));
+        out.push_back(tag + "FLVER header sample (direct or inside bundles): ok " + std::to_string(flver_ok) +
+                      ", failed " + std::to_string(flver_fail) + "; versions " + TopList(flver_versions, 4) +
+                      "; byte order " + TopList(flver_order, 2) + "; vertex index bits " +
+                      TopList(flver_index_bits, 3) + "; " + (flver_ok ? range : "no valid header"));
+        if (!first_flver_error.empty()) {
+            out.push_back(tag + "first FLVER failure: " + first_flver_error);
+            out.push_back(tag + "first failing FLVER, first 96 bytes (16 per group): " + first_flver_dump);
         }
     }
     if (bnd_ok + bnd_fail > 0) {

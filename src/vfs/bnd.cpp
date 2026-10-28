@@ -142,11 +142,21 @@ bool InFile(std::span<const std::byte> bytes, std::uint64_t offset, std::uint64_
     return offset <= bytes.size() && size <= bytes.size() - offset;
 }
 
-// `header_end` != 0 additionally requires the table and every name to lie below it.
+// What a candidate entry table must satisfy to be accepted.
+struct TableRules {
+    std::uint64_t header_end = 0;  // != 0: the table and every name must lie below it
+    bool data_in_file = true;      // BND3: entry data follows the table inside the same file
+    bool data_size_known = true;   // is `data_size` meaningful?
+    std::uint64_t data_size = 0;   // size of the space the data offsets point into
+};
+
+constexpr std::uint64_t kBdf3HeaderSize = 0x10; // BDF3 data files start with a 16-byte header
+
 std::optional<std::vector<BndEntry>> ReadBnd3Entries(std::span<const std::byte> bytes,
                                                      const io::ByteView& view,
                                                      std::uint64_t count, const FormatBits& bits,
-                                                     std::uint64_t header_end, std::string* why) {
+                                                     const TableRules& rules, std::string* why) {
+    const std::uint64_t header_end = rules.header_end;
     const std::uint64_t stride = 8 + (bits.long_offsets ? 8 : 4) + (bits.ids ? 4 : 0) +
                                  (bits.names ? 4 : 0) + (bits.compression ? 4 : 0);
     if (count > (bytes.size() - kBnd3HeaderSize) / stride) {
@@ -196,14 +206,17 @@ std::optional<std::vector<BndEntry>> ReadBnd3Entries(std::span<const std::byte> 
             }
             e.uncompressed_size = static_cast<std::uint64_t>(u);
         }
-        if (!InFile(bytes, e.offset, e.stored_size)) {
+        if (rules.data_size_known &&
+            !(e.offset <= rules.data_size && e.stored_size <= rules.data_size - e.offset)) {
             *why = "entry " + std::to_string(i) + ": data lies outside the file";
             return std::nullopt;
         }
-        // Names and data live after the entry table. This is what tells a wrong offset width
-        // apart from the right one: with the wrong stride every entry after the first is
-        // misaligned and its fields land inside the table.
-        if ((e.stored_size > 0 && e.offset < table_end) || (bits.names && name_offset < table_end)) {
+        // Names (and, in a BND3, data) live after the entry table. This is what tells a wrong
+        // offset width apart from the right one: with the wrong stride every entry after the
+        // first is misaligned and its fields land inside the table.
+        if ((rules.data_in_file && e.stored_size > 0 && e.offset < table_end) ||
+            (!rules.data_in_file && e.stored_size > 0 && e.offset < kBdf3HeaderSize) ||
+            (bits.names && name_offset < table_end)) {
             *why = "entry " + std::to_string(i) + ": points back into the entry table";
             return std::nullopt;
         }
@@ -220,30 +233,18 @@ std::optional<std::vector<BndEntry>> ReadBnd3Entries(std::span<const std::byte> 
     return entries;
 }
 
-std::optional<BndIndex> ParseBnd3(std::span<const std::byte> bytes, std::string* error) {
-    if (bytes.size() < kBnd3HeaderSize) {
-        return Fail(error, "BND3: file shorter than the 32-byte header", bytes);
-    }
-    io::ByteView view(bytes);
-    BndIndex index;
-    index.kind = BndKind::Bnd3;
-    index.version = TrimmedAscii(bytes, 4, 8);
-    std::uint8_t flags = 0;
-    std::uint8_t endian = 0;
-    std::int32_t count = 0;
-    (void)view.Read(0x0C, flags);
-    (void)view.Read(0x0D, endian);
-    index.format_flags = flags;
-    index.big_endian = endian != 0;
-    view.SetBigEndian(index.big_endian);
-    if (!view.Read(0x10, count) || count < 0) {
-        return Fail(error, "BND3: bad entry count", bytes);
-    }
+struct Bnd3Layout {
+    std::vector<BndEntry> entries;
+    FormatBits bits{};
+    bool corrected = false;           // differs from what the flags say
+    bool header_end_consistent = false;
+    std::string why_first;            // why the flag-derived layout was rejected
+};
 
-    std::int32_t header_end_field = 0;
-    (void)view.Read(0x14, header_end_field);
-    const std::uint64_t header_end = header_end_field > 0 ? static_cast<std::uint64_t>(header_end_field) : 0;
-
+// Searches the entry layouts described in bnd.h and returns the first that validates.
+std::optional<Bnd3Layout> FindBnd3Layout(std::span<const std::byte> bytes, const io::ByteView& view,
+                                         std::uint64_t count, std::uint8_t flags,
+                                         TableRules rules) {
     const FormatBits declared = DecodeFormat(flags);
     // Candidate layouts: flag-derived first, then the opposite offset width, then the rest.
     std::vector<FormatBits> candidates;
@@ -276,48 +277,86 @@ std::optional<BndIndex> ParseBnd3(std::span<const std::byte> bytes, std::string*
     std::stable_sort(candidates.begin() + static_cast<std::ptrdiff_t>(fixed), candidates.end(),
                      [&](const FormatBits& a, const FormatBits& b) { return width(a) > width(b); });
 
-    std::optional<std::vector<BndEntry>> entries;
-    FormatBits chosen = declared;
-    std::string why_first;
-    bool header_end_ok = false;
+    Bnd3Layout result;
+    result.bits = declared;
+    const std::uint64_t header_end = rules.header_end;
     // Pass 0 insists the names fit the declared end-of-headers; pass 1 drops that requirement
     // in case the field means something else in some files.
-    for (int pass = 0; pass < 2 && !entries; ++pass) {
+    for (int pass = 0; pass < 2; ++pass) {
         if (pass == 0 && header_end == 0) {
             continue;
         }
+        TableRules pass_rules = rules;
+        pass_rules.header_end = pass == 0 ? header_end : 0;
         for (const FormatBits& candidate : candidates) {
             std::string why;
-            auto parsed = ReadBnd3Entries(bytes, view, static_cast<std::uint64_t>(count), candidate,
-                                          pass == 0 ? header_end : 0, &why);
+            auto parsed = ReadBnd3Entries(bytes, view, count, candidate, pass_rules, &why);
             if (parsed) {
-                entries = std::move(parsed);
-                chosen = candidate;
-                header_end_ok = pass == 0;
-                break;
+                result.entries = std::move(*parsed);
+                result.bits = candidate;
+                result.header_end_consistent = pass == 0;
+                result.corrected = candidate.ids != declared.ids ||
+                                   candidate.compression != declared.compression ||
+                                   candidate.long_offsets != declared.long_offsets;
+                return result;
             }
-            if (why_first.empty()) {
-                why_first = why; // the reason the flag-derived layout was rejected
+            if (result.why_first.empty()) {
+                result.why_first = why;
             }
         }
     }
-    if (!entries) {
-        return Fail(error, "BND3: no entry layout fits this file (flag-derived layout: " + why_first +
+    return std::nullopt;
+}
+
+std::uint32_t StrideOf(const FormatBits& bits) {
+    return static_cast<std::uint32_t>(8 + (bits.long_offsets ? 8 : 4) + (bits.ids ? 4 : 0) +
+                                      (bits.names ? 4 : 0) + (bits.compression ? 4 : 0));
+}
+
+std::optional<BndIndex> ParseBnd3(std::span<const std::byte> bytes, std::string* error) {
+    if (bytes.size() < kBnd3HeaderSize) {
+        return Fail(error, "BND3: file shorter than the 32-byte header", bytes);
+    }
+    io::ByteView view(bytes);
+    BndIndex index;
+    index.kind = BndKind::Bnd3;
+    index.version = TrimmedAscii(bytes, 4, 8);
+    std::uint8_t flags = 0;
+    std::uint8_t endian = 0;
+    std::int32_t count = 0;
+    (void)view.Read(0x0C, flags);
+    (void)view.Read(0x0D, endian);
+    index.format_flags = flags;
+    index.big_endian = endian != 0;
+    view.SetBigEndian(index.big_endian);
+    if (!view.Read(0x10, count) || count < 0) {
+        return Fail(error, "BND3: bad entry count", bytes);
+    }
+    std::int32_t header_end_field = 0;
+    (void)view.Read(0x14, header_end_field);
+
+    TableRules rules;
+    rules.header_end = header_end_field > 0 ? static_cast<std::uint64_t>(header_end_field) : 0;
+    rules.data_size = bytes.size();
+    auto layout = FindBnd3Layout(bytes, view, static_cast<std::uint64_t>(count), flags, rules);
+    if (!layout) {
+        // Reconstruct the flag-derived failure reason for the message.
+        std::string why;
+        (void)ReadBnd3Entries(bytes, view, static_cast<std::uint64_t>(count), DecodeFormat(flags),
+                              rules, &why);
+        return Fail(error, "BND3: no entry layout fits this file (flag-derived layout: " + why +
                                "); count " + std::to_string(count) + ", declared end of headers " +
-                               std::to_string(header_end),
+                               std::to_string(rules.header_end),
                     bytes);
     }
-    index.layout_corrected = chosen.ids != declared.ids || chosen.compression != declared.compression ||
-                             chosen.long_offsets != declared.long_offsets;
-    index.long_offsets = chosen.long_offsets;
-    index.has_ids = chosen.ids;
-    index.has_names = chosen.names;
-    index.has_compression_field = chosen.compression;
-    index.header_end_consistent = header_end_ok;
-    index.entry_stride = static_cast<std::uint32_t>(8 + (chosen.long_offsets ? 8 : 4) +
-                                                    (chosen.ids ? 4 : 0) + (chosen.names ? 4 : 0) +
-                                                    (chosen.compression ? 4 : 0));
-    index.entries = std::move(*entries);
+    index.layout_corrected = layout->corrected;
+    index.long_offsets = layout->bits.long_offsets;
+    index.has_ids = layout->bits.ids;
+    index.has_names = layout->bits.names;
+    index.has_compression_field = layout->bits.compression;
+    index.header_end_consistent = layout->header_end_consistent;
+    index.entry_stride = StrideOf(layout->bits);
+    index.entries = std::move(layout->entries);
     return index;
 }
 
@@ -417,6 +456,125 @@ std::optional<BndIndex> ParseBnd4(std::span<const std::byte> bytes, std::string*
 }
 
 } // namespace
+
+bool IsBhf3(std::span<const std::byte> bytes) noexcept {
+    return io::ByteView(bytes).Matches(0, "BHF3", 4);
+}
+
+std::optional<BxfIndex> ParseBhf3(std::span<const std::byte> header,
+                                  std::optional<std::uint64_t> data_size, std::string* error) {
+    if (!IsBhf3(header)) {
+        return Fail(error, "not a BHF3 header file (bad magic)", header);
+    }
+    if (header.size() < kBnd3HeaderSize) {
+        return Fail(error, "BHF3: file shorter than the 32-byte header", header);
+    }
+    io::ByteView view(header);
+    BxfIndex index;
+    index.version = TrimmedAscii(header, 4, 8);
+    std::uint8_t flags = 0;
+    std::uint8_t endian = 0;
+    std::int32_t count = 0;
+    (void)view.Read(0x0C, flags);
+    (void)view.Read(0x0D, endian);
+    index.format_flags = flags;
+    index.big_endian = endian != 0;
+    view.SetBigEndian(index.big_endian);
+    if (!view.Read(0x10, count) || count < 0) {
+        return Fail(error, "BHF3: bad entry count", header);
+    }
+    TableRules rules;
+    rules.data_in_file = false; // the entry data is in the paired BDF3 file
+    // Without the paired file's size, offsets are still capped at 4 GiB: otherwise a table read
+    // with an id column folded into 64-bit offsets would validate just as well.
+    rules.data_size_known = true;
+    rules.data_size = data_size.value_or(0xFFFFFFFFull);
+    auto layout = FindBnd3Layout(header, view, static_cast<std::uint64_t>(count), flags, rules);
+    if (!layout) {
+        std::string why;
+        (void)ReadBnd3Entries(header, view, static_cast<std::uint64_t>(count), DecodeFormat(flags),
+                              rules, &why);
+        return Fail(error, "BHF3: no entry layout fits this file (flag-derived layout: " + why +
+                               "); count " + std::to_string(count),
+                    header);
+    }
+    index.layout_corrected = layout->corrected;
+    index.has_ids = layout->bits.ids;
+    index.has_names = layout->bits.names;
+    index.has_compression_field = layout->bits.compression;
+    index.long_offsets = layout->bits.long_offsets;
+    index.entry_stride = StrideOf(layout->bits);
+    index.entries = std::move(layout->entries);
+    for (const BndEntry& e : index.entries) {
+        index.data_extent = std::max(index.data_extent, e.offset + e.stored_size);
+    }
+    return index;
+}
+
+SplitBundle::SplitBundle(std::vector<std::byte> data, BxfIndex index)
+    : data_(std::move(data)), index_(std::move(index)) {
+    by_name_.reserve(index_.entries.size());
+    for (std::uint32_t i = 0; i < index_.entries.size(); ++i) {
+        if (!index_.entries[i].name.empty()) {
+            by_name_.emplace(Vfs::Normalize(index_.entries[i].name), i);
+        }
+    }
+}
+
+std::optional<SplitBundle> SplitBundle::Open(std::vector<std::byte> header,
+                                             std::vector<std::byte> data, std::string* error) {
+    for (std::vector<std::byte>* part : {&header, &data}) {
+        if (IsDcx(*part)) {
+            auto inflated = DecompressDcx(*part, error);
+            if (!inflated) {
+                return std::nullopt;
+            }
+            *part = std::move(*inflated);
+        }
+    }
+    if (!io::ByteView(data).Matches(0, "BDF3", 4)) {
+        return Fail(error, "split bundle data file does not start with BDF3", data);
+    }
+    auto index = ParseBhf3(header, data.size(), error);
+    if (!index) {
+        return std::nullopt;
+    }
+    return SplitBundle(std::move(data), std::move(*index));
+}
+
+const BndEntry* SplitBundle::Find(std::string_view name) const {
+    const std::string key = Vfs::Normalize(name);
+    if (key.empty()) {
+        return nullptr;
+    }
+    if (const auto it = by_name_.find(key); it != by_name_.end()) {
+        return &index_.entries[it->second];
+    }
+    const std::string suffix = "/" + key;
+    for (const BndEntry& entry : index_.entries) {
+        if (entry.name.empty()) {
+            continue;
+        }
+        const std::string full = Vfs::Normalize(entry.name);
+        if (full.size() > suffix.size() &&
+            full.compare(full.size() - suffix.size(), suffix.size(), suffix) == 0) {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
+std::span<const std::byte> SplitBundle::Raw(const BndEntry& entry) const noexcept {
+    if (entry.offset > data_.size() || entry.stored_size > data_.size() - entry.offset) {
+        return {};
+    }
+    return {data_.data() + entry.offset, static_cast<std::size_t>(entry.stored_size)};
+}
+
+std::optional<std::vector<std::byte>> SplitBundle::Read(const BndEntry& entry,
+                                                        std::string* error) const {
+    return DecodeIfDcx(Raw(entry), error);
+}
 
 bool IsBnd(std::span<const std::byte> bytes) noexcept {
     const io::ByteView view(bytes);

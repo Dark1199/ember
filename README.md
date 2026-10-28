@@ -66,7 +66,7 @@ never started (check the APK's `arm64-v8a` library and the device's Vulkan 1.1 s
 | M | Goal |
 |---|------|
 | 0 | Boot, Vulkan clear, mount game folder (this scaffold) |
-| 1 | Archive/container readers written from documented formats; `docs/formats/` (split archives, DCX/zlib and BND3/BND4 bundles written, unverified against real files) |
+| 1 | Archive/container readers written from documented formats; `docs/formats/` (split archives, DCX/zlib, BND3/BND4 bundles and BHF3/BDF3 split bundles; BHD5, DCX and BND3 verified against real PTDE files, BHF3 and FLVER headers pending the next survey) |
 | 2 | Shader pipeline (GLSL to SPIR-V at build time), first textured mesh from game data |
 | 3 | Map geometry, camera, free-fly through a level |
 | 4 | Character skeleton and animation playback |

@@ -207,6 +207,22 @@ std::shared_ptr<const BndArchive> Vfs::OpenBnd(std::string_view path, std::strin
     return std::make_shared<const BndArchive>(std::move(*archive));
 }
 
+std::shared_ptr<const SplitBundle> Vfs::OpenSplitBundle(std::string_view header_path,
+                                                        std::string_view data_path,
+                                                        std::string* error) const {
+    auto header = ReadAll(header_path);
+    auto data = ReadAll(data_path);
+    if (!header || !data) {
+        if (error) *error = "split bundle: header or data file not found";
+        return nullptr;
+    }
+    auto bundle = SplitBundle::Open(std::move(*header), std::move(*data), error);
+    if (!bundle) {
+        return nullptr;
+    }
+    return std::make_shared<const SplitBundle>(std::move(*bundle));
+}
+
 std::vector<std::string> Vfs::List(std::string_view prefix) const {
     const std::string key = Normalize(prefix);
     std::vector<std::string> result;
