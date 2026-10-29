@@ -194,6 +194,15 @@ bool Renderer::CreateSwapchain(std::string* error) {
         }
     }
 
+    switch (caps.currentTransform) {
+    case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR: pre_rotation_ = 1; break;
+    case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR: pre_rotation_ = 2; break;
+    case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR: pre_rotation_ = 3; break;
+    default: pre_rotation_ = 0; break;
+    }
+    EMBER_LOG("Surface transform %u -> pre-rotation %d quarter turn(s)",
+              static_cast<unsigned>(caps.currentTransform), pre_rotation_);
+
     const VkSwapchainCreateInfoKHR info{
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
         .surface = surface_,

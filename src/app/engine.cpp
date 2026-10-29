@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "core/log.h"
+#include "gfx/camera.h"
 #include "vfs/survey.h"
 
 namespace ember::app {
@@ -85,7 +86,28 @@ bool Engine::Startup(const Config& config) {
         EMBER_LOG("verify: finished in %.1f s",
                   std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
     }
+
+    // First mesh: find the first model that decodes cleanly and hand it to the render thread. The
+    // summary line says how many files were examined and why candidates were rejected, so if
+    // nothing is shown the log still says what the real data looked like.
+    std::string summary;
+    auto model = FindFirstModel(vfs_.Archives(), 8.0, &summary);
+    EMBER_LOG("model search: %s", summary.c_str());
+    if (model) {
+        EMBER_LOG("model: %s", model->description.c_str());
+        {
+            std::lock_guard<std::mutex> lock(model_mutex_);
+            pending_model_ = std::move(model);
+        }
+        model_ready_.store(true);
+    } else {
+        EMBER_WARN("model: none passed the checks; showing the placeholder screen");
+    }
     return true;
+}
+
+void Engine::ReleaseGpu(gfx::Renderer& renderer) {
+    mesh_.Release(renderer);
 }
 
 bool Engine::Frame(gfx::Renderer& renderer, double dt_seconds) {
@@ -102,10 +124,47 @@ bool Engine::Frame(gfx::Renderer& renderer, double dt_seconds) {
     }
     // Plain rectangles (attachment clears, no pipeline needed): a bar sweeping back and forth so
     // a live engine never looks frozen, and one tile per mounted archive once loading is done.
+    if (model_ready_.load() && !model_uploaded_ && !pipeline_failed_ &&
+        renderer.Device() != VK_NULL_HANDLE) {
+        std::optional<LoadedModel> model;
+        {
+            std::lock_guard<std::mutex> lock(model_mutex_);
+            model = std::move(pending_model_);
+            pending_model_.reset();
+        }
+        if (model) {
+            std::string error;
+            if (!mesh_.Initialize(renderer, &error) || !mesh_.Upload(renderer, model->positions, model->indices, &error)) {
+                EMBER_ERROR("mesh upload failed: %s", error.c_str());
+                pipeline_failed_ = true;
+            } else {
+                for (int i = 0; i < 3; ++i) {
+                    shown_min_[i] = model->bounds_min[i];
+                    shown_max_[i] = model->bounds_max[i];
+                }
+                model_uploaded_ = true;
+                EMBER_LOG("mesh uploaded: %zu vertices, %zu indices", model->positions.size() / 3,
+                          model->indices.size());
+            }
+        }
+    }
+    const bool show_mesh = model_uploaded_ && mesh_.Ready();
+    if (show_mesh) {
+        renderer.SetClearColor(0.05f, 0.05f, 0.07f);
+    }
     const std::size_t archives = vfs_.ArchiveCount();
     const bool loaded = !loading_.load();
     const double t = time_;
     return renderer.DrawFrame([&](const gfx::FrameContext& ctx) {
+        if (show_mesh) {
+            const int turns = renderer.PreRotationQuarterTurns();
+            const float w = static_cast<float>(ctx.extent.width), h = static_cast<float>(ctx.extent.height);
+            // With a quarter-turn pre-rotation the image is stored sideways relative to the display.
+            const float aspect = (turns & 1) ? h / w : w / h;
+            const gfx::Mat4 mvp = gfx::OrbitMvp(shown_min_, shown_max_, static_cast<float>(t), aspect, turns);
+            mesh_.Draw(ctx, mvp.data(), shown_min_[1], shown_max_[1]);
+            return;
+        }
         const auto rect = [&](std::int32_t x, std::int32_t y, std::uint32_t w, std::uint32_t h,
                               float r, float g, float b) {
             VkClearAttachment attachment{};

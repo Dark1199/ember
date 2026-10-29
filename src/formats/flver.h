@@ -6,6 +6,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace ember::formats {
 
@@ -56,8 +57,97 @@ struct FlverHeader {
 
 /// Parses and sanity-checks the header. Fails (with the reason and the first bytes) on a bad
 /// magic or byte order, a data range outside the file, implausible counts or a non-finite or
-/// inverted bounding box.
+/// inverted bounding box (an inverted "empty bounds" box is accepted when there are no meshes).
 [[nodiscard]] std::optional<FlverHeader> ParseFlverHeader(std::span<const std::byte> bytes,
                                                           std::string* error);
+
+// ---------------------------------------------------------------------------------------------
+// Body tables (also from public community documentation, NOT yet confirmed on real files). After
+// the header (padded to 0x80 bytes) the tables follow back to back in this order, with these entry
+// sizes: dummies 0x40, materials 0x20, bones 0x80, meshes 0x30, face sets 0x1C (0x18 and 0x20 are
+// also tried and the one that validates is used), vertex buffers 0x20, buffer layouts 0x10,
+// textures 0x20. Names and extra lists live between the tables and the data block.
+//
+//   mesh:         +0x00 u8 dynamic  +0x04 material  +0x10 default bone  +0x20 face set count
+//                 +0x24 offset of face set index list  +0x28 vertex buffer count
+//                 +0x2C offset of vertex buffer index list (offsets are absolute in the file)
+//   face set:     +0x00 flags (0 = main level of detail)  +0x04 u8 strip  +0x05 u8 cull
+//                 +0x08 index count  +0x0C index offset (relative to the data block)
+//   vertex buffer:+0x00 buffer index  +0x04 layout index  +0x08 vertex size  +0x0C vertex count
+//                 +0x18 buffer length  +0x1C buffer offset (relative to the data block)
+//   layout:       +0x00 member count  +0x0C absolute offset of members, each 0x14 bytes:
+//                 +0x04 offset in vertex  +0x08 type (2 = three floats)  +0x0C semantic
+//                 (0 = position)  +0x10 index
+//
+// Every value used is range-checked against the file, and the decoded positions are compared to
+// the header's bounding box, so a wrong guess shows up as a failure rather than as garbage.
+// ---------------------------------------------------------------------------------------------
+
+struct FlverMesh {
+    std::uint32_t material_index = 0;
+    std::uint32_t default_bone = 0;
+    bool dynamic = false;
+    std::vector<std::uint32_t> face_sets;
+    std::vector<std::uint32_t> vertex_buffers;
+};
+struct FlverFaceSet {
+    std::uint32_t flags = 0;
+    bool triangle_strip = false;
+    bool cull_backfaces = false;
+    std::uint32_t index_count = 0;
+    std::uint32_t index_offset = 0;
+};
+struct FlverVertexBuffer {
+    std::uint32_t buffer_index = 0;
+    std::uint32_t layout_index = 0;
+    std::uint32_t vertex_size = 0;
+    std::uint32_t vertex_count = 0;
+    std::uint32_t buffer_length = 0;
+    std::uint32_t buffer_offset = 0;
+};
+struct FlverMember {
+    std::uint32_t struct_offset = 0;
+    std::uint32_t type = 0;
+    std::uint32_t semantic = 0;
+    std::uint32_t index = 0;
+};
+
+struct FlverBody {
+    std::uint32_t face_set_stride = 0; ///< which candidate entry size validated
+    std::vector<FlverMesh> meshes;
+    std::vector<FlverFaceSet> face_sets;
+    std::vector<FlverVertexBuffer> vertex_buffers;
+    std::vector<std::vector<FlverMember>> layouts;
+};
+
+/// Size in bytes of everything from the file start through the last table, assuming the given
+/// face-set entry size. A correct layout never exceeds the header's data offset.
+[[nodiscard]] std::uint64_t FlverTablesEnd(const FlverHeader& header, std::uint32_t face_set_stride);
+
+/// Reads the mesh, face-set, vertex-buffer and layout tables. Fails with a reason if no
+/// candidate layout validates.
+[[nodiscard]] std::optional<FlverBody> ParseFlverBody(std::span<const std::byte> bytes,
+                                                      const FlverHeader& header, std::string* error);
+
+/// All meshes merged: positions (xyz triples) and a triangle list. Only the main level of detail
+/// of each mesh is used.
+struct FlverGeometry {
+    std::vector<float> positions;
+    std::vector<std::uint32_t> indices;
+    std::uint32_t vertex_count = 0;
+    std::uint32_t meshes_decoded = 0;
+    std::uint32_t meshes_without_positions = 0;
+    std::uint32_t meshes_without_faces = 0;
+    std::uint32_t strip_sets = 0;
+    std::uint32_t list_sets = 0;
+    std::uint64_t bad_indices = 0;               ///< triangles dropped: index past the vertex count
+    std::uint64_t non_finite_vertices = 0;
+    std::uint64_t outside_bounds_components = 0; ///< position components outside the header box
+};
+
+[[nodiscard]] std::optional<FlverGeometry> DecodeFlverGeometry(std::span<const std::byte> bytes,
+                                                               const FlverHeader& header,
+                                                               const FlverBody& body,
+                                                               std::string* error);
 
 } // namespace ember::formats

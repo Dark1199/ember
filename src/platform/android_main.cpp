@@ -227,5 +227,6 @@ void android_main(android_app* app) {
     if (state.startup.joinable()) {
         state.startup.join();
     }
+    state.engine.ReleaseGpu(state.renderer);
     state.renderer.Shutdown();
 }

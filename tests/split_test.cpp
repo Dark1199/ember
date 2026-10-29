@@ -173,7 +173,7 @@ int main() {
         }
         assert(!formats::ParseFlverHeader(Flver(false, 0x100, 0x200, -1.0f, 1.0f, 0x2FF), &error)); // data past EOF
         assert(error.find("outside the file") != std::string::npos);
-        assert(!formats::ParseFlverHeader(Flver(false, 0x100, 0x200, 2.0f, 1.0f, 0x400), &error));  // inverted box
+        assert(!formats::ParseFlverHeader(Flver(false, 0x100, 0x200, 2.0f, 1.0f, 0x400), &error));  // inverted box (4 meshes)
         assert(!formats::ParseFlverHeader(Flver(false, 0x100, 0x200, NAN, 1.0f, 0x400), &error));
         assert(!formats::ParseFlverHeader(Flver(false, 0x10, 0x20, -1.0f, 1.0f, 0x400), &error));    // data inside header
         Bytes bad = Flver(false, 0x100, 0x200, -1.0f, 1.0f, 0x400);

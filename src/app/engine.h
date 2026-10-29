@@ -3,8 +3,12 @@
 
 #include <atomic>
 #include <filesystem>
+#include <mutex>
+#include <optional>
 #include <string>
 
+#include "app/model_loader.h"
+#include "gfx/mesh_renderer.h"
 #include "gfx/renderer.h"
 #include "vfs/vfs.h"
 
@@ -38,6 +42,9 @@ public:
     /// Advances the engine and draws one frame.
     bool Frame(gfx::Renderer& renderer, double dt_seconds);
 
+    /// Frees GPU resources; call from the render thread before the renderer shuts down.
+    void ReleaseGpu(gfx::Renderer& renderer);
+
     [[nodiscard]] const vfs::Vfs& Files() const noexcept {
         return vfs_;
     }
@@ -55,6 +62,16 @@ private:
     std::atomic<bool> game_found_{false};
     std::atomic<bool> loading_{true};
     double time_ = 0.0;
+
+    // First-mesh path: the worker thread finds and decodes a model, the render thread uploads it.
+    std::mutex model_mutex_;
+    std::optional<LoadedModel> pending_model_;
+    std::atomic<bool> model_ready_{false};
+    bool model_uploaded_ = false;
+    bool pipeline_failed_ = false;
+    gfx::MeshRenderer mesh_;
+    float shown_min_[3] = {};
+    float shown_max_[3] = {};
 };
 
 } // namespace ember::app

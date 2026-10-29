@@ -168,6 +168,13 @@ void SurveyOne(const Bhd5Archive& archive, std::vector<std::string>& out) {
     std::fill(std::begin(flver_min), std::end(flver_min), 0xFFFFFFFFu);
     float flver_extent_max = 0.0f;
     std::string first_flver_error, first_flver_dump;
+    // Body (tables + geometry) statistics, for models with meshes.
+    std::size_t body_models = 0, body_ok = 0, body_fail = 0, tables_fit = 0, geom_ok = 0, geom_fail = 0;
+    std::uint64_t g_vertices = 0, g_triangles = 0, g_bad = 0, g_nonfinite = 0, g_outside = 0,
+                  g_components = 0;
+    std::uint32_t g_strip = 0, g_list = 0;
+    std::map<std::string, std::size_t> body_strides, layout_shapes;
+    std::string first_body_error, first_body_dump, first_geom_error;
     const auto check_flver = [&](std::span<const std::byte> bytes) {
         if (flver_ok + flver_fail >= kFlverSampleLimit) {
             return;
@@ -188,6 +195,50 @@ void SurveyOne(const Bhd5Archive& archive, std::vector<std::string>& out) {
             }
             for (int i = 0; i < 3; ++i) {
                 flver_extent_max = std::max(flver_extent_max, h->bounds_max[i] - h->bounds_min[i]);
+            }
+            if (h->mesh_count > 0) {
+                ++body_models;
+                if (formats::FlverTablesEnd(*h, 0x1C) <= h->data_offset) ++tables_fit;
+                std::string berr;
+                if (const auto body = formats::ParseFlverBody(bytes, *h, &berr)) {
+                    ++body_ok;
+                    ++body_strides["0x" + [&] { char t[8]; std::snprintf(t, sizeof(t), "%x", body->face_set_stride); return std::string(t); }()];
+                    for (const auto& layout : body->layouts) {
+                        std::string shape;
+                        for (const auto& m : layout) {
+                            shape += std::to_string(m.semantic) + ":" + std::to_string(m.type) + "@" +
+                                     std::to_string(m.struct_offset) + " ";
+                        }
+                        ++layout_shapes[shape];
+                    }
+                    std::string gerr;
+                    if (const auto g = formats::DecodeFlverGeometry(bytes, *h, *body, &gerr)) {
+                        ++geom_ok;
+                        g_vertices += g->vertex_count;
+                        g_triangles += g->indices.size() / 3;
+                        g_bad += g->bad_indices;
+                        g_nonfinite += g->non_finite_vertices;
+                        g_outside += g->outside_bounds_components;
+                        g_components += 3ull * g->vertex_count;
+                        g_strip += g->strip_sets;
+                        g_list += g->list_sets;
+                    } else {
+                        ++geom_fail;
+                        if (first_geom_error.empty()) first_geom_error = gerr;
+                    }
+                } else {
+                    ++body_fail;
+                    if (first_body_error.empty()) {
+                        first_body_error = berr;
+                        // Table region right after the header: shows the real entry shapes.
+                        for (std::size_t i = 0x80; i < std::min<std::size_t>(bytes.size(), 0x80 + 256); ++i) {
+                            char t[4];
+                            std::snprintf(t, sizeof(t), "%02x ", static_cast<unsigned>(bytes[i]));
+                            first_body_dump += t;
+                            if ((i - 0x80) % 16 == 15) first_body_dump += "| ";
+                        }
+                    }
+                }
             }
         } else {
             ++flver_fail;
@@ -360,6 +411,32 @@ void SurveyOne(const Bhd5Archive& archive, std::vector<std::string>& out) {
         if (!first_flver_error.empty()) {
             out.push_back(tag + "first FLVER failure: " + first_flver_error);
             out.push_back(tag + "first failing FLVER, first 96 bytes (16 per group): " + first_flver_dump);
+        }
+    }
+    if (body_models > 0) {
+        char geo[400];
+        std::snprintf(geo, sizeof(geo),
+                      "%zu vertices, %llu triangles, %llu dropped for bad indices, %llu non-finite vertices, "
+                      "%llu of %llu position components outside the header box (+1%% slack); "
+                      "strip face sets %u, list face sets %u",
+                      static_cast<std::size_t>(g_vertices), static_cast<unsigned long long>(g_triangles),
+                      static_cast<unsigned long long>(g_bad), static_cast<unsigned long long>(g_nonfinite),
+                      static_cast<unsigned long long>(g_outside), static_cast<unsigned long long>(g_components),
+                      g_strip, g_list);
+        out.push_back(tag + "FLVER body sample (" + std::to_string(body_models) + " models with meshes): table sizes fit before the data block " +
+                      std::to_string(tables_fit) + "/" + std::to_string(body_models) + "; tables validated " +
+                      std::to_string(body_ok) + ", failed " + std::to_string(body_fail) + "; face-set entry size " +
+                      TopList(body_strides, 3) + "; geometry decoded " + std::to_string(geom_ok) + ", failed " +
+                      std::to_string(geom_fail) + "; " + geo);
+        if (!layout_shapes.empty()) {
+            out.push_back(tag + "FLVER vertex layouts (semantic:type@offset): " + TopList(layout_shapes, 6));
+        }
+        if (!first_body_error.empty()) {
+            out.push_back(tag + "first FLVER body failure: " + first_body_error);
+            out.push_back(tag + "bytes 0x80..0x180 of that file (16 per group): " + first_body_dump);
+        }
+        if (!first_geom_error.empty()) {
+            out.push_back(tag + "first FLVER geometry failure: " + first_geom_error);
         }
     }
     if (bnd_ok + bnd_fail > 0) {

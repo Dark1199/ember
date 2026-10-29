@@ -64,6 +64,15 @@ public:
 
     void Shutdown();
 
+    // Access for resource classes (MeshRenderer). The device and render pass outlive the window.
+    [[nodiscard]] VkDevice Device() const noexcept { return device_; }
+    [[nodiscard]] VkRenderPass RenderPass() const noexcept { return render_pass_; }
+    [[nodiscard]] uint32_t FindMemoryType(uint32_t type_bits, VkMemoryPropertyFlags required) const;
+    /// Quarter turns clockwise (0..3) the swapchain pre-transform asks the app to apply to clip
+    /// space, and whether width/height are swapped relative to what the user sees.
+    [[nodiscard]] int PreRotationQuarterTurns() const noexcept { return pre_rotation_; }
+    [[nodiscard]] VkExtent2D Extent() const noexcept { return extent_; }
+
 private:
     static constexpr uint32_t kFramesInFlight = 2;
 
@@ -83,7 +92,6 @@ private:
     bool CreateFrames(std::string* error);
     void DestroySwapchainResources();
     bool RecreateSwapchain();
-    [[nodiscard]] uint32_t FindMemoryType(uint32_t type_bits, VkMemoryPropertyFlags required) const;
 
     VkInstance instance_ = VK_NULL_HANDLE;
     VkPhysicalDevice physical_ = VK_NULL_HANDLE;
@@ -95,6 +103,7 @@ private:
     VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
     VkFormat color_format_ = VK_FORMAT_UNDEFINED;
     VkExtent2D extent_{};
+    int pre_rotation_ = 0;
     std::vector<VkImage> images_;
     std::vector<VkImageView> views_;
     std::vector<VkFramebuffer> framebuffers_;
