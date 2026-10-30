@@ -24,6 +24,8 @@ struct TpfProbe {
     std::optional<formats::TpfIndex> index; ///< parsed header, entries and names
     std::string error;                 ///< why `index` is empty
     std::vector<std::byte> prefix;     ///< the bytes that were read (header, entries, names, maybe more)
+    bool dcx_wrapped = false;          ///< stored as ".tpf.dcx": `prefix` then holds the WHOLE decoded TPF
+                                       ///< and texture offsets are relative to it, not to the BDF3
 };
 
 struct TpfScanStats {

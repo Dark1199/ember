@@ -497,7 +497,15 @@ void SurveyOne(const Bhd5Archive& archive, std::vector<std::string>& out) {
             ++tpf_shapes[shape];
             for (const auto& t : probe.index->textures) {
                 ++tex_count;
-                const auto head = archive.ReadRange(*probe.data_entry, probe.offset + t.offset, 128);
+                std::optional<std::vector<std::byte>> head;
+                if (probe.dcx_wrapped) {
+                    if (t.offset <= probe.prefix.size()) {
+                        head = std::vector<std::byte>(probe.prefix.begin() + t.offset,
+                                                      probe.prefix.begin() + std::min<std::size_t>(probe.prefix.size(), t.offset + 128));
+                    }
+                } else {
+                    head = archive.ReadRange(*probe.data_entry, probe.offset + t.offset, 128);
+                }
                 std::string derr;
                 const auto info = head ? formats::ParseDds(*head, &derr, false) : std::nullopt;
                 if (!info) {

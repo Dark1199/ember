@@ -192,7 +192,15 @@ std::vector<LoadedTexture> FindTextures(const std::vector<vfs::Bhd5Archive>& arc
                 const std::string key = TextureKey(t.name);
                 const auto it = missing.find(key);
                 if (it == missing.end() || t.size > (24u << 20)) continue;
-                const auto bytes = archive.ReadRange(*probe.data_entry, probe.offset + t.offset, t.size);
+                std::optional<std::vector<std::byte>> bytes;
+                if (probe.dcx_wrapped) {
+                    if (t.offset <= probe.prefix.size() && t.size <= probe.prefix.size() - t.offset) {
+                        bytes = std::vector<std::byte>(probe.prefix.begin() + t.offset,
+                                                       probe.prefix.begin() + t.offset + t.size);
+                    }
+                } else {
+                    bytes = archive.ReadRange(*probe.data_entry, probe.offset + t.offset, t.size);
+                }
                 std::string err;
                 const auto info = bytes ? formats::ParseDds(*bytes, &err) : std::nullopt;
                 if (!info) {

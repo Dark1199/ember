@@ -5,6 +5,7 @@
 #include <fstream>
 
 #include "vfs/bnd.h"
+#include "vfs/dcx.h"
 #include "vfs/vfs.h"
 
 namespace ember::vfs {
@@ -64,7 +65,8 @@ TpfScanStats ScanSplitTpfs(const Bhd5Archive& archive, double budget_seconds, st
             ++stats.entries;
             ++stats.extensions[Extension(e.name)];
             if (stats.first_names.size() < 400) stats.first_names += e.name + " | ";
-            if (Vfs::Normalize(e.name).ends_with(".tpf")) tpfs.push_back(&e);
+            const std::string n = Vfs::Normalize(e.name);
+            if (n.ends_with(".tpf") || n.ends_with(".tpf.dcx")) tpfs.push_back(&e);
         }
         if (tpfs.empty()) continue;
         // Candidate data files: size within [extent, extent + 64]; the first TPF's magic decides.
@@ -72,7 +74,9 @@ TpfScanStats ScanSplitTpfs(const Bhd5Archive& archive, double budget_seconds, st
         for (const Bhd5Entry* d : data_files) {
             if (d->stored_size < index->data_extent || d->stored_size > index->data_extent + 64) continue;
             const auto probe = archive.ReadRange(*d, tpfs.front()->offset, 4);
-            if (probe && probe->size() == 4 && std::string_view(reinterpret_cast<const char*>(probe->data()), 4) == std::string_view("TPF\0", 4)) {
+            const std::string_view want = Vfs::Normalize(tpfs.front()->name).ends_with(".dcx")
+                                              ? std::string_view("DCX\0", 4) : std::string_view("TPF\0", 4);
+            if (probe && probe->size() == 4 && std::string_view(reinterpret_cast<const char*>(probe->data()), 4) == want) {
                 data_entry = d;
                 break;
             }
@@ -92,13 +96,24 @@ TpfScanStats ScanSplitTpfs(const Bhd5Archive& archive, double budget_seconds, st
             probe.data_entry = data_entry;
             probe.offset = t->offset;
             probe.size = t->stored_size;
-            auto prefix = archive.ReadRange(*data_entry, t->offset, std::min<std::uint64_t>(prefix_bytes, t->stored_size));
+            probe.dcx_wrapped = Vfs::Normalize(t->name).ends_with(".dcx");
+            std::optional<std::vector<std::byte>> prefix;
+            if (probe.dcx_wrapped) {
+                // The compressed stream must be read whole; the decoded TPF replaces the prefix.
+                if (t->stored_size <= (24u << 20)) {
+                    if (const auto raw = archive.ReadRange(*data_entry, t->offset, t->stored_size)) {
+                        prefix = DecompressDcx(*raw, &probe.error);
+                    }
+                }
+            } else {
+                prefix = archive.ReadRange(*data_entry, t->offset, std::min<std::uint64_t>(prefix_bytes, t->stored_size));
+            }
             if (!prefix) {
-                probe.error = "read failed";
+                if (probe.error.empty()) probe.error = "read failed";
                 ++stats.tpf_failed;
             } else {
                 probe.prefix = std::move(*prefix);
-                probe.index = formats::ParseTpf(probe.prefix, t->stored_size, &probe.error);
+                probe.index = formats::ParseTpf(probe.prefix, probe.dcx_wrapped ? probe.prefix.size() : t->stored_size, &probe.error);
                 (probe.index ? stats.tpf_parsed : stats.tpf_failed) += 1;
             }
             ++visited;
