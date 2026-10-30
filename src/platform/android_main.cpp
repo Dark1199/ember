@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // NativeActivity entry point: owns the Android lifecycle and connects the window to the renderer.
+#include <android/input.h>
+#include <android/keycodes.h>
 #include <android/native_activity.h>
 #include <android/native_window.h>
 #include <android_native_app_glue.h>
@@ -29,6 +31,7 @@ struct AppState {
     ember::gfx::Renderer renderer;
     ember::app::Engine engine;
     ember::app::Settings settings;
+    int screen_w = 0, screen_h = 0; // window size before the resolution scale, for touch mapping
     std::thread startup;       // mounts the game files off the render/event thread
     bool instance_ready = false;
     bool running = false;      // between APP_CMD_RESUME and APP_CMD_PAUSE
@@ -100,8 +103,10 @@ void AttachWindow(android_app* app, AppState& state) {
     }
     // Resolution scale: ask the window for a smaller buffer; the compositor scales it up to the
     // screen. Must happen before the swapchain exists, which then reports the smaller extent.
+    state.screen_w = ANativeWindow_getWidth(app->window);
+    state.screen_h = ANativeWindow_getHeight(app->window);
     if (state.settings.resolution_scale_percent < 100) {
-        const int w = ANativeWindow_getWidth(app->window), h = ANativeWindow_getHeight(app->window);
+        const int w = state.screen_w, h = state.screen_h;
         const auto size = ember::app::ScaleResolution(w, h, state.settings.resolution_scale_percent);
         const int rc = ANativeWindow_setBuffersGeometry(app->window, size.width, size.height, 0);
         EMBER_LOG("Resolution scale %d%%: window %dx%d -> buffers %dx%d (result %d)",
@@ -129,6 +134,23 @@ void AttachWindow(android_app* app, AppState& state) {
         return;
     }
     EMBER_LOG("Surface attached");
+}
+
+int32_t OnInput(android_app* app, AInputEvent* event) {
+    auto& state = *static_cast<AppState*>(app->userData);
+    if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_MOTION) {
+        if ((AMotionEvent_getAction(event) & AMOTION_EVENT_ACTION_MASK) == AMOTION_EVENT_ACTION_DOWN &&
+            state.screen_w > 0 && state.screen_h > 0) {
+            state.engine.OnTap(AMotionEvent_getX(event, 0) / static_cast<float>(state.screen_w),
+                               AMotionEvent_getY(event, 0) / static_cast<float>(state.screen_h));
+            return 1;
+        }
+    } else if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_KEY &&
+               AKeyEvent_getKeyCode(event) == AKEYCODE_BACK) {
+        // Acted on at key-up; at the title screen the key is left to the system (closes the app).
+        return AKeyEvent_getAction(event) == AKEY_EVENT_ACTION_UP && state.engine.OnBack() ? 1 : 0;
+    }
+    return 0;
 }
 
 void OnCommand(android_app* app, int32_t cmd) {
@@ -180,6 +202,7 @@ void android_main(android_app* app) {
     }
     app->userData = &state;
     app->onAppCmd = OnCommand;
+    app->onInputEvent = OnInput;
 
     std::string error;
     const std::vector<const char*> extensions = {"VK_KHR_surface", "VK_KHR_android_surface"};
@@ -193,6 +216,7 @@ void android_main(android_app* app) {
     // Scanning the game folder can take a while; do it on a worker so window events keep being
     // processed and the app shows its grey "loading" frame immediately.
     ember::app::Config config;
+    config.settings = state.settings;
     config.game_root = ember::app::LocateGameRoot(files_dir);
     // The launcher's "Verify files" button drops this marker; it is consumed so the slow pass
     // runs once per request.
@@ -227,6 +251,9 @@ void android_main(android_app* app) {
         }
         if (app->destroyRequested) {
             break;
+        }
+        if (state.engine.WantsQuit()) {
+            ANativeActivity_finish(app->activity);
         }
         // The window may have arrived while the app was already resumed.
         AttachWindow(app, state);

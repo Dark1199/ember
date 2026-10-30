@@ -9,6 +9,7 @@
 
 #include "core/log.h"
 #include "gfx/camera.h"
+#include "ui/font.h"
 #include "vfs/survey.h"
 
 namespace ember::app {
@@ -34,6 +35,7 @@ bool Engine::Startup(const Config& config) {
             flag.store(false);
         }
     } done{loading_};
+    settings_ = config.settings;
     EMBER_LOG("Game root: %s", config.game_root.string().c_str());
     const auto started = std::chrono::steady_clock::now();
     std::string error;
@@ -50,6 +52,8 @@ bool Engine::Startup(const Config& config) {
     std::vector<std::string> archive_errors;
     const std::size_t archives = vfs_.MountArchivesFromIndex(&archive_errors);
     EMBER_LOG("Mounted %zu archive(s), %zu packed files", archives, vfs_.PackedFileCount());
+    archive_count_ = archives;
+    packed_count_ = vfs_.PackedFileCount();
     for (const std::string& problem : archive_errors) {
         // Includes the first bytes of the index so a wrong format assumption can be diagnosed.
         EMBER_WARN("Archive problem: %s", problem.c_str());
@@ -95,6 +99,7 @@ bool Engine::Startup(const Config& config) {
     EMBER_LOG("model search: %s", summary.c_str());
     if (model) {
         EMBER_LOG("model: %s", model->description.c_str());
+        model_description_ = model->description;
         std::string tex_summary;
         auto textures = FindTextures(vfs_.Archives(), model->material_texture_keys, 10.0, &tex_summary);
         EMBER_LOG("textures: %s", tex_summary.c_str());
@@ -111,11 +116,43 @@ bool Engine::Startup(const Config& config) {
 }
 
 void Engine::ReleaseGpu(gfx::Renderer& renderer) {
+    ui_renderer_.Release(renderer);
     mesh_.Release(renderer);
+}
+
+namespace {
+ui::MenuInfo MakeInfo(bool found, bool loading, bool model_ready, const Settings& s,
+                      std::size_t archives, std::size_t packed, std::size_t textures,
+                      const std::string& model) {
+    ui::MenuInfo info;
+    info.game_found = found;
+    info.loading = loading;
+    info.model_ready = model_ready;
+    info.lines = {std::string("GAME FILES: ") + (found ? "FOUND" : "NOT FOUND"),
+                  "ARCHIVES: " + std::to_string(archives) + "  PACKED FILES: " + std::to_string(packed),
+                  std::string("MODEL: ") + (model_ready ? "LOADED" : "NONE YET") +
+                      "  TEXTURES: " + std::to_string(textures),
+                  "RESOLUTION SCALE: " + std::to_string(s.resolution_scale_percent) + "%",
+                  "FRAME CAP: " + (s.frame_cap ? std::to_string(s.frame_cap) + " FPS" : std::string("DISPLAY RATE")),
+                  std::string("SHADOWS: ") + (s.shadows ? "ON" : "OFF") + " (NO SHADOW PASS YET)",
+                  "CHANGE SETTINGS IN THE LAUNCHER"};
+    return info;
+}
+} // namespace
+
+void Engine::OnTap(float nx, float ny) {
+    const ui::MenuInfo info = MakeInfo(game_found_.load(), loading_.load(), model_uploaded_, settings_,
+                                       archive_count_, packed_count_, texture_count_, model_description_);
+    menu_.OnTap(nx, ny, aspect_, info);
+}
+
+bool Engine::OnBack() {
+    return menu_.OnBack();
 }
 
 bool Engine::Frame(gfx::Renderer& renderer, double dt_seconds) {
     time_ += dt_seconds;
+    menu_.Update(dt_seconds);
     // Placeholder output so a glance at the screen tells the user what state the app is in:
     // grey = still scanning the game folder, blue = game folder mounted, red = not found.
     const float pulse = 0.5f + 0.5f * std::sin(static_cast<float>(time_) * 1.5f);
@@ -167,12 +204,31 @@ bool Engine::Frame(gfx::Renderer& renderer, double dt_seconds) {
                     }
                 }
                 EMBER_LOG("textures bound to %zu of %zu materials", bound, model->material_texture_keys.size());
+                texture_count_ = textures.size();
                 model_uploaded_ = true;
                 EMBER_LOG("mesh uploaded: %zu vertices, %zu indices", model->positions.size() / 3,
                           model->indices.size());
             }
         }
     }
+    if (!ui_failed_ && !ui_renderer_.Ready() && renderer.Device() != VK_NULL_HANDLE) {
+        std::string error;
+        if (ui_renderer_.Initialize(renderer, &error)) {
+            EMBER_LOG("UI renderer ready (font atlas %dx%d)", ui::Font().width, ui::Font().height);
+        } else {
+            EMBER_ERROR("UI renderer failed: %s", error.c_str());
+            ui_failed_ = true;
+        }
+    }
+    {
+        const float w = static_cast<float>(renderer.Extent().width), h = static_cast<float>(renderer.Extent().height);
+        if (w > 0 && h > 0) aspect_ = (renderer.PreRotationQuarterTurns() & 1) ? h / w : w / h;
+    }
+    const bool ui_on = ui_renderer_.Ready();
+    const ui::MenuInfo menu_info = MakeInfo(game_found_.load(), loading_.load(), model_uploaded_, settings_,
+                                            archive_count_, packed_count_, texture_count_, model_description_);
+    batch_.Clear();
+    if (ui_on) menu_.Draw(batch_, aspect_, menu_info);
     const bool show_mesh = model_uploaded_ && mesh_.Ready();
     if (show_mesh) {
         renderer.SetClearColor(0.05f, 0.05f, 0.07f);
@@ -188,8 +244,12 @@ bool Engine::Frame(gfx::Renderer& renderer, double dt_seconds) {
             const float aspect = (turns & 1) ? h / w : w / h;
             const gfx::Mat4 mvp = gfx::OrbitMvp(shown_min_, shown_max_, static_cast<float>(t), aspect, turns);
             mesh_.Draw(ctx, mvp.data(), shown_min_[1], shown_max_[1]);
-            return;
         }
+        if (ui_on) {
+            ui_renderer_.Draw(ctx, batch_, ui::kLayoutHeight * aspect_, ui::kLayoutHeight,
+                              renderer.PreRotationQuarterTurns());
+        }
+        if (show_mesh || ui_on) return;
         const auto rect = [&](std::int32_t x, std::int32_t y, std::uint32_t w, std::uint32_t h,
                               float r, float g, float b) {
             VkClearAttachment attachment{};

@@ -9,7 +9,10 @@
 
 #include "app/model_loader.h"
 #include "gfx/mesh_renderer.h"
+#include "app/settings.h"
 #include "gfx/renderer.h"
+#include "gfx/ui_renderer.h"
+#include "ui/menu.h"
 #include "vfs/vfs.h"
 
 namespace ember::app {
@@ -21,6 +24,7 @@ struct Config {
     bool verify_archives = false;
     /// Where the verification result is written (empty: not written).
     std::filesystem::path verify_report;
+    Settings settings;
 };
 
 /// Picks the game directory. `external_files_dir` is the app's private external storage
@@ -44,6 +48,12 @@ public:
 
     /// Frees GPU resources; call from the render thread before the renderer shuts down.
     void ReleaseGpu(gfx::Renderer& renderer);
+
+    /// A finger went down at (nx, ny), 0..1 of the screen as the user holds it. Render thread.
+    void OnTap(float nx, float ny);
+    /// The back button. Returns true when the engine used it (otherwise the app may close).
+    bool OnBack();
+    [[nodiscard]] bool WantsQuit() const noexcept { return menu_.WantsQuit(); }
 
     [[nodiscard]] const vfs::Vfs& Files() const noexcept {
         return vfs_;
@@ -71,6 +81,16 @@ private:
     bool model_uploaded_ = false;
     bool pipeline_failed_ = false;
     gfx::MeshRenderer mesh_;
+    gfx::UiRenderer ui_renderer_;
+    bool ui_failed_ = false;
+    ui::Menu menu_;
+    ui::UiBatch batch_;
+    Settings settings_;
+    std::string model_description_;
+    std::size_t texture_count_ = 0;
+    std::size_t archive_count_ = 0;
+    std::size_t packed_count_ = 0;
+    float aspect_ = 16.0f / 9.0f;
     float shown_min_[3] = {};
     float shown_max_[3] = {};
 };

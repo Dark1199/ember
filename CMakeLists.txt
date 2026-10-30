@@ -17,7 +17,8 @@ else()
 endif()
 
 add_library(ember_core STATIC src/vfs/vfs.cpp src/vfs/bhd5.cpp src/vfs/dcx.cpp src/vfs/bnd.cpp
-    src/vfs/survey.cpp src/formats/flver.cpp src/formats/dds.cpp src/formats/tpf.cpp src/vfs/tpf_scan.cpp src/app/model_loader.cpp src/app/settings.cpp)
+    src/vfs/survey.cpp src/formats/flver.cpp src/formats/dds.cpp src/formats/tpf.cpp src/vfs/tpf_scan.cpp src/app/model_loader.cpp src/app/settings.cpp
+    src/ui/font.cpp src/ui/ui_batch.cpp src/ui/menu.cpp)
 target_link_libraries(ember_core PUBLIC ${EMBER_ZLIB})
 target_include_directories(ember_core PUBLIC src)
 
@@ -50,6 +51,9 @@ if(EMBER_BUILD_TESTS)
     add_executable(settings_test tests/settings_test.cpp)
     target_link_libraries(settings_test PRIVATE ember_core)
     add_test(NAME settings_test COMMAND settings_test)
+    add_executable(ui_test tests/ui_test.cpp)
+    target_link_libraries(ui_test PRIVATE ember_core)
+    add_test(NAME ui_test COMMAND ui_test)
     add_executable(camera_test tests/camera_test.cpp)
     target_link_libraries(camera_test PRIVATE ember_core)
     add_test(NAME camera_test COMMAND camera_test)
@@ -68,7 +72,7 @@ if(ANDROID)
     set(EMBER_SHADER_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
     file(MAKE_DIRECTORY ${EMBER_SHADER_DIR})
     set(EMBER_SHADER_INCS)
-    foreach(shader mesh.vert mesh.frag)
+    foreach(shader mesh.vert mesh.frag ui.vert ui.frag)
         add_custom_command(
             OUTPUT ${EMBER_SHADER_DIR}/${shader}.inc
             COMMAND ${EMBER_GLSLC} -mfmt=c -O -o ${EMBER_SHADER_DIR}/${shader}.inc
@@ -82,6 +86,7 @@ if(ANDROID)
         src/platform/android_main.cpp
         src/gfx/renderer.cpp
         src/gfx/mesh_renderer.cpp
+        src/gfx/ui_renderer.cpp
         ${EMBER_SHADER_INCS}
         src/app/engine.cpp
         src/core/crash.cpp)
