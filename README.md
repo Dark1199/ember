@@ -67,7 +67,7 @@ never started (check the APK's `arm64-v8a` library and the device's Vulkan 1.1 s
 |---|------|
 | 0 | Boot, Vulkan clear, mount game folder (this scaffold) |
 | 1 | Archive/container readers written from documented formats; `docs/formats/` (split archives, DCX/zlib, BND3/BND4 bundles and BHF3/BDF3 split bundles; BHD5, DCX and BND3 verified against real PTDE files, BHF3 and FLVER headers pending the next survey) |
-| 2 | Shader pipeline (GLSL to SPIR-V at build time, NDK glslc), FLVER body tables and geometry decoding, first mesh drawn flat-shaded with an orbit camera. FLVER headers match real files; the body tables follow community documentation and are checked on your files by the survey (`FLVER body sample` lines) and at startup (`model search` line in `ember.log`). Textures come next |
+| 2 | Shader pipeline (GLSL to SPIR-V at build time), FLVER body decoding (verified on 49 sampled real models), first mesh with orbit camera, then materials, UVs, TPF/DDS texture reading (DXT1/3/5) and a textured draw. TPF layout and material slots follow community documentation and are checked by the survey (`TPF sample`, `FLVER materials` lines) and by the `textures:` line in `ember.log` |
 | 3 | Map geometry, camera, free-fly through a level |
 | 4 | Character skeleton and animation playback |
 | 5+ | Collision, input, game rules, scripts, audio |

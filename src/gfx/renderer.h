@@ -67,6 +67,8 @@ public:
     // Access for resource classes (MeshRenderer). The device and render pass outlive the window.
     [[nodiscard]] VkDevice Device() const noexcept { return device_; }
     [[nodiscard]] VkRenderPass RenderPass() const noexcept { return render_pass_; }
+    [[nodiscard]] VkQueue Queue() const noexcept { return queue_; }
+    [[nodiscard]] uint32_t QueueFamily() const noexcept { return queue_family_; }
     [[nodiscard]] uint32_t FindMemoryType(uint32_t type_bits, VkMemoryPropertyFlags required) const;
     /// Quarter turns clockwise (0..3) the swapchain pre-transform asks the app to apply to clip
     /// space, and whether width/height are swapped relative to what the user sees.

@@ -17,7 +17,7 @@ else()
 endif()
 
 add_library(ember_core STATIC src/vfs/vfs.cpp src/vfs/bhd5.cpp src/vfs/dcx.cpp src/vfs/bnd.cpp
-    src/vfs/survey.cpp src/formats/flver.cpp src/app/model_loader.cpp)
+    src/vfs/survey.cpp src/formats/flver.cpp src/formats/dds.cpp src/formats/tpf.cpp src/vfs/tpf_scan.cpp src/app/model_loader.cpp)
 target_link_libraries(ember_core PUBLIC ${EMBER_ZLIB})
 target_include_directories(ember_core PUBLIC src)
 
@@ -44,6 +44,9 @@ if(EMBER_BUILD_TESTS)
     add_executable(flver_test tests/flver_test.cpp)
     target_link_libraries(flver_test PRIVATE ember_core)
     add_test(NAME flver_test COMMAND flver_test)
+    add_executable(texture_test tests/texture_test.cpp)
+    target_link_libraries(texture_test PRIVATE ember_core)
+    add_test(NAME texture_test COMMAND texture_test)
     add_executable(camera_test tests/camera_test.cpp)
     target_link_libraries(camera_test PRIVATE ember_core)
     add_test(NAME camera_test COMMAND camera_test)

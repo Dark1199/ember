@@ -95,9 +95,13 @@ bool Engine::Startup(const Config& config) {
     EMBER_LOG("model search: %s", summary.c_str());
     if (model) {
         EMBER_LOG("model: %s", model->description.c_str());
+        std::string tex_summary;
+        auto textures = FindTextures(vfs_.Archives(), model->material_texture_keys, 10.0, &tex_summary);
+        EMBER_LOG("textures: %s", tex_summary.c_str());
         {
             std::lock_guard<std::mutex> lock(model_mutex_);
             pending_model_ = std::move(model);
+            pending_textures_ = std::move(textures);
         }
         model_ready_.store(true);
     } else {
@@ -127,14 +131,19 @@ bool Engine::Frame(gfx::Renderer& renderer, double dt_seconds) {
     if (model_ready_.load() && !model_uploaded_ && !pipeline_failed_ &&
         renderer.Device() != VK_NULL_HANDLE) {
         std::optional<LoadedModel> model;
+        std::vector<LoadedTexture> textures;
         {
             std::lock_guard<std::mutex> lock(model_mutex_);
             model = std::move(pending_model_);
+            textures = std::move(pending_textures_);
             pending_model_.reset();
         }
         if (model) {
             std::string error;
-            if (!mesh_.Initialize(renderer, &error) || !mesh_.Upload(renderer, model->positions, model->indices, &error)) {
+            std::vector<gfx::MeshRange> ranges;
+            for (const auto& r : model->ranges) ranges.push_back({r.first_index, r.index_count, r.material_index});
+            if (!mesh_.Initialize(renderer, &error) ||
+                !mesh_.Upload(renderer, model->positions, model->uvs, model->indices, ranges, &error)) {
                 EMBER_ERROR("mesh upload failed: %s", error.c_str());
                 pipeline_failed_ = true;
             } else {
@@ -142,6 +151,22 @@ bool Engine::Frame(gfx::Renderer& renderer, double dt_seconds) {
                     shown_min_[i] = model->bounds_min[i];
                     shown_max_[i] = model->bounds_max[i];
                 }
+                std::size_t bound = 0;
+                for (const LoadedTexture& t : textures) {
+                    std::string terr;
+                    const int slot = mesh_.AddTexture(renderer, t.levels, &terr);
+                    if (slot < 0) {
+                        EMBER_WARN("texture %s upload failed: %s", t.key.c_str(), terr.c_str());
+                        continue;
+                    }
+                    for (std::size_t m = 0; m < model->material_texture_keys.size(); ++m) {
+                        if (model->material_texture_keys[m] == t.key) {
+                            mesh_.BindMaterialTexture(static_cast<std::uint32_t>(m), slot);
+                            ++bound;
+                        }
+                    }
+                }
+                EMBER_LOG("textures bound to %zu of %zu materials", bound, model->material_texture_keys.size());
                 model_uploaded_ = true;
                 EMBER_LOG("mesh uploaded: %zu vertices, %zu indices", model->positions.size() / 3,
                           model->indices.size());

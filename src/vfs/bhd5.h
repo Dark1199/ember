@@ -75,6 +75,12 @@ public:
     [[nodiscard]] const Bhd5Entry* Find(std::uint32_t name_hash) const noexcept;
     [[nodiscard]] std::optional<std::vector<std::byte>> Read(const Bhd5Entry& entry) const;
 
+    /// Reads `size` bytes starting `offset` bytes into the entry (clamped to the entry's stored
+    /// size). Used to peek at headers inside large entries without reading all of them.
+    [[nodiscard]] std::optional<std::vector<std::byte>> ReadRange(const Bhd5Entry& entry,
+                                                                  std::uint64_t offset,
+                                                                  std::uint64_t size) const;
+
     [[nodiscard]] const Bhd5Index& Index() const noexcept {
         return index_;
     }

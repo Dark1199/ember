@@ -199,4 +199,23 @@ std::optional<std::vector<std::byte>> Bhd5Archive::Read(const Bhd5Entry& entry) 
     return data;
 }
 
+std::optional<std::vector<std::byte>> Bhd5Archive::ReadRange(const Bhd5Entry& entry,
+                                                             std::uint64_t offset,
+                                                             std::uint64_t size) const {
+    if (offset > entry.stored_size) {
+        return std::nullopt;
+    }
+    size = std::min<std::uint64_t>(size, entry.stored_size - offset);
+    std::ifstream file(data_path_, std::ios::binary);
+    if (!file) {
+        return std::nullopt;
+    }
+    file.seekg(static_cast<std::streamoff>(entry.data_offset + offset));
+    std::vector<std::byte> data(static_cast<std::size_t>(size));
+    if (size > 0 && !file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(size))) {
+        return std::nullopt;
+    }
+    return data;
+}
+
 } // namespace ember::vfs

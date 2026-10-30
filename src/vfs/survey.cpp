@@ -6,7 +6,10 @@
 #include <fstream>
 #include <map>
 
+#include "formats/dds.h"
 #include "formats/flver.h"
+#include "formats/tpf.h"
+#include "vfs/tpf_scan.h"
 #include "vfs/bnd.h"
 #include "vfs/dcx.h"
 #include "vfs/vfs.h"
@@ -175,6 +178,10 @@ void SurveyOne(const Bhd5Archive& archive, std::vector<std::string>& out) {
     std::uint32_t g_strip = 0, g_list = 0;
     std::map<std::string, std::size_t> body_strides, layout_shapes;
     std::string first_body_error, first_body_dump, first_geom_error;
+    std::size_t mat_models = 0, mat_strings_bad = 0, mat_total = 0, tex_total = 0, uv_models = 0;
+    std::map<std::string, std::size_t> tex_types;
+    std::string first_tex_paths;
+    float uv_lo = 1e30f, uv_hi = -1e30f;
     const auto check_flver = [&](std::span<const std::byte> bytes) {
         if (flver_ok + flver_fail >= kFlverSampleLimit) {
             return;
@@ -198,7 +205,7 @@ void SurveyOne(const Bhd5Archive& archive, std::vector<std::string>& out) {
             }
             if (h->mesh_count > 0) {
                 ++body_models;
-                if (formats::FlverTablesEnd(*h, 0x1C) <= h->data_offset) ++tables_fit;
+                if (formats::FlverTablesEnd(*h, 0x20) <= h->data_offset) ++tables_fit;
                 std::string berr;
                 if (const auto body = formats::ParseFlverBody(bytes, *h, &berr)) {
                     ++body_ok;
@@ -211,8 +218,21 @@ void SurveyOne(const Bhd5Archive& archive, std::vector<std::string>& out) {
                         }
                         ++layout_shapes[shape];
                     }
+                    ++mat_models;
+                    mat_total += body->materials.size();
+                    tex_total += body->textures.size();
+                    if (!body->strings_ok) ++mat_strings_bad;
+                    for (const auto& t : body->textures) {
+                        ++tex_types[t.type];
+                        if (first_tex_paths.size() < 330) first_tex_paths += t.type + " = " + t.path + " | ";
+                    }
                     std::string gerr;
                     if (const auto g = formats::DecodeFlverGeometry(bytes, *h, *body, &gerr)) {
+                        if (g->meshes_with_uvs > 0) {
+                            ++uv_models;
+                            uv_lo = std::min({uv_lo, g->uv_min[0], g->uv_min[1]});
+                            uv_hi = std::max({uv_hi, g->uv_max[0], g->uv_max[1]});
+                        }
                         ++geom_ok;
                         g_vertices += g->vertex_count;
                         g_triangles += g->indices.size() / 3;
@@ -437,6 +457,81 @@ void SurveyOne(const Bhd5Archive& archive, std::vector<std::string>& out) {
         }
         if (!first_geom_error.empty()) {
             out.push_back(tag + "first FLVER geometry failure: " + first_geom_error);
+        }
+    }
+    if (mat_models > 0) {
+        char uv[160];
+        std::snprintf(uv, sizeof(uv), "%zu models have UVs, range %.2f..%.2f (raw int16 / 1024)", uv_models,
+                      static_cast<double>(uv_lo), static_cast<double>(uv_hi));
+        out.push_back(tag + "FLVER materials: " + std::to_string(mat_total) + " in " + std::to_string(mat_models) +
+                      " models, " + std::to_string(tex_total) + " texture references, " +
+                      std::to_string(mat_strings_bad) + " models with unreadable strings; " + uv);
+        out.push_back(tag + "FLVER texture slot names: " + TopList(tex_types, 10));
+        out.push_back(tag + "FLVER first texture references: " + first_tex_paths);
+    }
+    {
+        // Texture packs inside split bundles: how they are named, and whether the TPF and DDS
+        // headers read as described.
+        std::map<std::string, std::size_t> tpf_shapes, dds_formats;
+        std::string first_tpf_error, first_tpf_dump;
+        std::size_t tex_count = 0, dds_ok = 0, dds_bad = 0, big_dim = 0;
+        std::uint32_t max_w = 0, max_h = 0, max_mips = 0;
+        std::string dds_error;
+        const TpfScanStats scan = ScanSplitTpfs(archive, 6.0, 60, 16384, [&](const TpfProbe& probe) {
+            if (!probe.index) {
+                if (first_tpf_error.empty()) {
+                    first_tpf_error = probe.error;
+                    for (std::size_t i = 0; i < std::min<std::size_t>(probe.prefix.size(), 96); ++i) {
+                        char h[4];
+                        std::snprintf(h, sizeof(h), "%02x ", static_cast<unsigned>(probe.prefix[i]));
+                        first_tpf_dump += h;
+                        if (i % 16 == 15) first_tpf_dump += "| ";
+                    }
+                }
+                return true;
+            }
+            char shape[80];
+            std::snprintf(shape, sizeof(shape), "platform %u flag2 %u encoding %u entry size 0x%x",
+                          probe.index->platform, probe.index->flag2, probe.index->encoding,
+                          probe.index->entry_stride);
+            ++tpf_shapes[shape];
+            for (const auto& t : probe.index->textures) {
+                ++tex_count;
+                const auto head = archive.ReadRange(*probe.data_entry, probe.offset + t.offset, 128);
+                std::string derr;
+                const auto info = head ? formats::ParseDds(*head, &derr, false) : std::nullopt;
+                if (!info) {
+                    ++dds_bad;
+                    if (dds_error.empty()) dds_error = derr.empty() ? "unreadable" : derr;
+                    continue;
+                }
+                ++dds_ok;
+                ++dds_formats[info->format_name + (info->format == formats::DdsFormat::Unsupported ? " (unsupported)" : "")];
+                max_w = std::max(max_w, info->width);
+                max_h = std::max(max_h, info->height);
+                max_mips = std::max(max_mips, info->mip_count);
+                big_dim += info->width > 1024 || info->height > 1024;
+            }
+            return true;
+        });
+        if (scan.bhf3_headers > 0) {
+            std::string exts;
+            for (const auto& [ext, count] : scan.extensions) exts += ext + " x" + std::to_string(count) + "  ";
+            out.push_back(tag + "split bundles: " + std::to_string(scan.bhf3_headers) + " BHF3 read, " +
+                          std::to_string(scan.bhf3_unparsed) + " unparsed, " + std::to_string(scan.bhf3_unpaired) +
+                          " with TPFs but no data file found, " + std::to_string(scan.entries) + " entries; names end in " + exts);
+            out.push_back(tag + "first split-bundle entry names: " + scan.first_names);
+            out.push_back(tag + "TPF sample: " + std::to_string(scan.tpf_entries) + " files, parsed " +
+                          std::to_string(scan.tpf_parsed) + ", failed " + std::to_string(scan.tpf_failed) +
+                          "; shapes " + TopList(tpf_shapes, 4) + "; " + std::to_string(tex_count) + " textures, DDS headers ok " +
+                          std::to_string(dds_ok) + ", bad " + std::to_string(dds_bad) + "; pixel formats " +
+                          TopList(dds_formats, 6) + "; largest " + std::to_string(max_w) + "x" + std::to_string(max_h) +
+                          ", up to " + std::to_string(max_mips) + " mips, " + std::to_string(big_dim) + " above 1024");
+            if (!first_tpf_error.empty()) {
+                out.push_back(tag + "first TPF failure: " + first_tpf_error);
+                out.push_back(tag + "first failing TPF, first 96 bytes: " + first_tpf_dump);
+            }
+            if (!dds_error.empty()) out.push_back(tag + "first DDS problem: " + dds_error);
         }
     }
     if (bnd_ok + bnd_fail > 0) {

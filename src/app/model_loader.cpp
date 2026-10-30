@@ -3,14 +3,29 @@
 
 #include <chrono>
 #include <cstdio>
+#include <algorithm>
+#include <cctype>
 #include <map>
+#include <set>
 
 #include "formats/flver.h"
 #include "vfs/bnd.h"
 #include "vfs/dcx.h"
+#include "vfs/tpf_scan.h"
 #include "vfs/vfs.h"
 
 namespace ember::app {
+
+std::string TextureKey(const std::string& path) {
+    std::string name = path;
+    const auto slash = name.find_last_of("/\\");
+    if (slash != std::string::npos) name.erase(0, slash + 1);
+    const auto dot = name.rfind('.');
+    if (dot != std::string::npos) name.erase(dot);
+    for (char& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return name;
+}
+
 namespace {
 
 constexpr std::uint32_t kMinTriangles = 1500;
@@ -62,7 +77,22 @@ std::optional<LoadedModel> TryModel(std::span<const std::byte> bytes, const std:
                         std::to_string(triangles) + " triangles, face-set entry size " +
                         std::to_string(body->face_set_stride);
     model.positions = std::move(geometry->positions);
+    model.uvs = std::move(geometry->uvs);
     model.indices = std::move(geometry->indices);
+    model.ranges = std::move(geometry->ranges);
+    for (const formats::FlverMaterial& m : body->materials) {
+        std::string key;
+        for (std::uint32_t i = 0; i < m.texture_count; ++i) {
+            const formats::FlverTexture& t = body->textures[m.texture_index + i];
+            std::string type = t.type;
+            for (char& ch : type) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            if (type.find("diffuse") != std::string::npos) {
+                key = TextureKey(t.path);
+                break;
+            }
+        }
+        model.material_texture_keys.push_back(std::move(key));
+    }
     for (int i = 0; i < 3; ++i) {
         model.bounds_min[i] = header->bounds_min[i];
         model.bounds_max[i] = header->bounds_max[i];
@@ -126,6 +156,91 @@ std::optional<LoadedModel> FindFirstModel(const std::vector<vfs::Bhd5Archive>& a
                       std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
         *summary = buf;
         if (!c.first_problem.empty()) *summary += "; first problem: " + c.first_problem;
+    }
+    return found;
+}
+
+} // namespace ember::app
+
+namespace ember::app {
+
+std::vector<LoadedTexture> FindTextures(const std::vector<vfs::Bhd5Archive>& archives,
+                                        const std::vector<std::string>& wanted_keys,
+                                        double time_budget_seconds, std::string* summary) {
+    const auto started = std::chrono::steady_clock::now();
+    const auto elapsed = [&] {
+        return std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    };
+    std::set<std::string> missing;
+    for (const std::string& k : wanted_keys) {
+        if (!k.empty()) missing.insert(k);
+    }
+    const std::size_t wanted = missing.size();
+    std::vector<LoadedTexture> found;
+    std::size_t tpfs = 0, tpf_failed = 0, decode_failed = 0, unsupported = 0;
+    std::string first_problem;
+    for (const vfs::Bhd5Archive& archive : archives) {
+        if (missing.empty() || elapsed() > time_budget_seconds) break;
+        vfs::ScanSplitTpfs(archive, time_budget_seconds - elapsed(), SIZE_MAX, 16384,
+                           [&](const vfs::TpfProbe& probe) {
+            ++tpfs;
+            if (!probe.index) {
+                ++tpf_failed;
+                return true;
+            }
+            for (const formats::TpfTexture& t : probe.index->textures) {
+                const std::string key = TextureKey(t.name);
+                const auto it = missing.find(key);
+                if (it == missing.end() || t.size > (24u << 20)) continue;
+                const auto bytes = archive.ReadRange(*probe.data_entry, probe.offset + t.offset, t.size);
+                std::string err;
+                const auto info = bytes ? formats::ParseDds(*bytes, &err) : std::nullopt;
+                if (!info) {
+                    ++decode_failed;
+                    if (first_problem.empty()) first_problem = key + ": " + (bytes ? err : "read failed");
+                    missing.erase(it); // do not retry a broken copy
+                    continue;
+                }
+                if (info->format == formats::DdsFormat::Unsupported) {
+                    ++unsupported;
+                    if (first_problem.empty()) first_problem = key + ": pixel format " + info->format_name;
+                    missing.erase(it);
+                    continue;
+                }
+                std::uint32_t skip = 0;
+                for (std::uint32_t w = info->width, h = info->height;
+                     (w > 1024 || h > 1024) && skip + 1 < info->mip_count; w /= 2, h /= 2) {
+                    ++skip;
+                }
+                auto levels = formats::DecodeDds(*bytes, *info, 12, &err, skip);
+                if (!levels) {
+                    ++decode_failed;
+                    if (first_problem.empty()) first_problem = key + ": " + err;
+                } else {
+                    found.push_back({key, std::move(*levels)});
+                }
+                missing.erase(it);
+            }
+            return !missing.empty() && elapsed() < time_budget_seconds;
+        });
+    }
+    if (summary) {
+        char buf[300];
+        std::snprintf(buf, sizeof(buf),
+                      "%zu texture names wanted, %zu found and decoded, %zu not found; scanned %zu TPF files "
+                      "(%zu unreadable), %zu decode failures, %zu unsupported formats; %.2f s",
+                      wanted, found.size(), missing.size(), tpfs, tpf_failed, decode_failed, unsupported,
+                      elapsed());
+        *summary = buf;
+        if (!first_problem.empty()) *summary += "; first problem: " + first_problem;
+        if (!missing.empty()) {
+            *summary += "; first missing:";
+            int n = 0;
+            for (const std::string& k : missing) {
+                if (n++ >= 4) break;
+                *summary += " " + k;
+            }
+        }
     }
     return found;
 }

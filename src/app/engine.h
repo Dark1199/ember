@@ -66,6 +66,7 @@ private:
     // First-mesh path: the worker thread finds and decodes a model, the render thread uploads it.
     std::mutex model_mutex_;
     std::optional<LoadedModel> pending_model_;
+    std::vector<LoadedTexture> pending_textures_;
     std::atomic<bool> model_ready_{false};
     bool model_uploaded_ = false;
     bool pipeline_failed_ = false;

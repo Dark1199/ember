@@ -64,8 +64,8 @@ struct FlverHeader {
 // ---------------------------------------------------------------------------------------------
 // Body tables (also from public community documentation, NOT yet confirmed on real files). After
 // the header (padded to 0x80 bytes) the tables follow back to back in this order, with these entry
-// sizes: dummies 0x40, materials 0x20, bones 0x80, meshes 0x30, face sets 0x1C (0x18 and 0x20 are
-// also tried and the one that validates is used), vertex buffers 0x20, buffer layouts 0x10,
+// sizes: dummies 0x40, materials 0x20, bones 0x80, meshes 0x30, face sets 0x20 (confirmed on real files; 0x1C
+// and 0x18 are still tried as fallbacks and the one that validates is used), vertex buffers 0x20, buffer layouts 0x10,
 // textures 0x20. Names and extra lists live between the tables and the data block.
 //
 //   mesh:         +0x00 u8 dynamic  +0x04 material  +0x10 default bone  +0x20 face set count
@@ -112,12 +112,26 @@ struct FlverMember {
     std::uint32_t index = 0;
 };
 
+struct FlverMaterial {
+    std::string name;
+    std::string mtd; ///< material definition name
+    std::uint32_t texture_count = 0;
+    std::uint32_t texture_index = 0; ///< first entry in FlverBody::textures
+};
+struct FlverTexture {
+    std::string path; ///< as stored, usually a Windows path ending in a file name
+    std::string type; ///< usage, e.g. a diffuse or normal-map slot name
+};
+
 struct FlverBody {
     std::uint32_t face_set_stride = 0; ///< which candidate entry size validated
     std::vector<FlverMesh> meshes;
     std::vector<FlverFaceSet> face_sets;
     std::vector<FlverVertexBuffer> vertex_buffers;
     std::vector<std::vector<FlverMember>> layouts;
+    std::vector<FlverMaterial> materials; ///< entry 0x20; strings UTF-16 when the header says unicode
+    std::vector<FlverTexture> textures;   ///< entry 0x20 after the layouts; strings as above
+    bool strings_ok = true;               ///< false if a material/texture string could not be read
 };
 
 /// Size in bytes of everything from the file start through the last table, assuming the given
@@ -129,10 +143,23 @@ struct FlverBody {
 [[nodiscard]] std::optional<FlverBody> ParseFlverBody(std::span<const std::byte> bytes,
                                                       const FlverHeader& header, std::string* error);
 
-/// All meshes merged: positions (xyz triples) and a triangle list. Only the main level of detail
-/// of each mesh is used.
+/// One mesh's slice of the merged triangle list.
+struct FlverDrawRange {
+    std::uint32_t first_index = 0;
+    std::uint32_t index_count = 0;
+    std::uint32_t material_index = 0;
+};
+
+/// All meshes merged: positions (xyz triples), texture coordinates (uv pairs, first set) and a
+/// triangle list. Only the main level of detail of each mesh is used. UVs: semantic 5, type 21
+/// (two int16) or 22 (two pairs of int16, the first is used), divided by 1024.
 struct FlverGeometry {
     std::vector<float> positions;
+    std::vector<float> uvs;
+    std::vector<FlverDrawRange> ranges;
+    std::uint32_t meshes_with_uvs = 0;
+    float uv_min[2] = {0, 0};
+    float uv_max[2] = {0, 0};
     std::vector<std::uint32_t> indices;
     std::uint32_t vertex_count = 0;
     std::uint32_t meshes_decoded = 0;

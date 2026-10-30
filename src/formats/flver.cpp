@@ -134,7 +134,30 @@ namespace {
 constexpr std::uint32_t kDummyBytes = 0x40, kMaterialBytes = 0x20, kBoneBytes = 0x80,
                         kMeshBytes = 0x30, kVertexBufferBytes = 0x20, kLayoutBytes = 0x10,
                         kMemberBytes = 0x14, kTextureBytes = 0x20;
-constexpr std::uint32_t kFaceSetStrides[] = {0x1C, 0x18, 0x20};
+constexpr std::uint32_t kFaceSetStrides[] = {0x20, 0x1C, 0x18};
+
+// Reads a zero-terminated string at an absolute offset: UTF-16LE/BE (non-ASCII characters become
+// '?') when `unicode`, else single bytes. Fails when unterminated within 512 characters.
+bool ReadString(std::span<const std::byte> bytes, bool big_endian, bool unicode, std::uint64_t off,
+                std::string& out) {
+    out.clear();
+    for (int i = 0; i < 512; ++i) {
+        if (unicode) {
+            if (off + 2ull * i + 2 > bytes.size()) return false;
+            const auto lo = static_cast<unsigned>(bytes[off + 2ull * i]);
+            const auto hi = static_cast<unsigned>(bytes[off + 2ull * i + 1]);
+            const unsigned c = big_endian ? (lo << 8) | hi : (hi << 8) | lo;
+            if (c == 0) return true;
+            out.push_back(c < 0x80 ? static_cast<char>(c) : '?');
+        } else {
+            if (off + i >= bytes.size()) return false;
+            const auto c = static_cast<char>(bytes[off + i]);
+            if (c == 0) return true;
+            out.push_back(c);
+        }
+    }
+    return false;
+}
 
 bool ReadU32(const io::ByteView& v, std::uint64_t off, std::uint32_t& out) {
     return v.Read(off, out);
@@ -284,7 +307,46 @@ std::optional<FlverBody> ParseFlverBody(std::span<const std::byte> bytes, const 
             if (!ok) break;
             layouts.push_back(std::move(members));
         }
+        std::vector<FlverMaterial> materials;
+        std::vector<FlverTexture> textures;
+        bool strings_ok = true;
         if (ok) {
+            const std::uint64_t materials_at = 0x80ull + 1ull * kDummyBytes * h.dummy_count;
+            for (std::uint32_t i = 0; i < h.material_count; ++i) {
+                const std::uint64_t at = materials_at + 1ull * kMaterialBytes * i;
+                FlverMaterial m;
+                std::uint32_t name_off = 0, mtd_off = 0;
+                if (!ReadU32(v, at, name_off) || !ReadU32(v, at + 4, mtd_off) ||
+                    !ReadU32(v, at + 8, m.texture_count) || !ReadU32(v, at + 12, m.texture_index)) {
+                    fail("material table runs past the file");
+                    break;
+                }
+                if (m.texture_index > h.texture_count || m.texture_count > h.texture_count - m.texture_index) {
+                    fail("material " + std::to_string(i) + " names textures outside the table");
+                    break;
+                }
+                strings_ok = strings_ok && ReadString(bytes, h.big_endian, h.unicode, name_off, m.name) &&
+                             ReadString(bytes, h.big_endian, h.unicode, mtd_off, m.mtd);
+                materials.push_back(std::move(m));
+            }
+            const std::uint64_t textures_at = layouts_at + 1ull * kLayoutBytes * h.buffer_layout_count;
+            for (std::uint32_t i = 0; ok && i < h.texture_count; ++i) {
+                const std::uint64_t at = textures_at + 1ull * kTextureBytes * i;
+                FlverTexture t;
+                std::uint32_t path_off = 0, type_off = 0;
+                if (!ReadU32(v, at, path_off) || !ReadU32(v, at + 4, type_off)) {
+                    fail("texture table runs past the file");
+                    break;
+                }
+                strings_ok = strings_ok && ReadString(bytes, h.big_endian, h.unicode, path_off, t.path) &&
+                             ReadString(bytes, h.big_endian, h.unicode, type_off, t.type);
+                textures.push_back(std::move(t));
+            }
+        }
+        if (ok) {
+            body.materials = std::move(materials);
+            body.textures = std::move(textures);
+            body.strings_ok = strings_ok;
             body.face_set_stride = stride;
             body.face_sets = std::move(face_sets);
             body.vertex_buffers = std::move(buffers);
@@ -383,6 +445,14 @@ std::optional<FlverGeometry> DecodeFlverGeometry(std::span<const std::byte> byte
             continue;
         }
 
+        const FlverMember* uv_member = nullptr;
+        for (const FlverMember& m : body.layouts[vb->layout_index]) {
+            if (m.semantic == 5 && m.index == 0 && (m.type == 21 || m.type == 22) &&
+                m.struct_offset + 4 <= vb->vertex_size) {
+                uv_member = &m;
+                break;
+            }
+        }
         const auto base = static_cast<std::uint32_t>(g.positions.size() / 3);
         const std::uint64_t first = static_cast<std::uint64_t>(h.data_offset) + vb->buffer_offset;
         for (std::uint32_t i = 0; i < vb->vertex_count; ++i) {
@@ -397,6 +467,26 @@ std::optional<FlverGeometry> DecodeFlverGeometry(std::span<const std::byte> byte
                 ++g.non_finite_vertices;
                 p[0] = p[1] = p[2] = 0.0f;
             }
+            float uv[2] = {0.0f, 0.0f};
+            if (uv_member) {
+                std::int16_t raw[2] = {0, 0};
+                const std::uint64_t at = first + 1ull * i * vb->vertex_size + uv_member->struct_offset;
+                if (!v.Read(at, raw[0]) || !v.Read(at + 2, raw[1])) {
+                    return BodyFail(error, "vertex data runs past the file");
+                }
+                uv[0] = static_cast<float>(raw[0]) / 1024.0f;
+                uv[1] = static_cast<float>(raw[1]) / 1024.0f;
+                if (g.meshes_with_uvs == 0 && g.uvs.empty()) {
+                    g.uv_min[0] = g.uv_max[0] = uv[0];
+                    g.uv_min[1] = g.uv_max[1] = uv[1];
+                }
+                for (int k = 0; k < 2; ++k) {
+                    g.uv_min[k] = std::min(g.uv_min[k], uv[k]);
+                    g.uv_max[k] = std::max(g.uv_max[k], uv[k]);
+                }
+            }
+            g.uvs.push_back(uv[0]);
+            g.uvs.push_back(uv[1]);
             for (int k = 0; k < 3; ++k) {
                 g.positions.push_back(p[k]);
                 const float slack = 0.01f * (h.bounds_max[k] - h.bounds_min[k]) + 1e-3f;
@@ -421,8 +511,12 @@ std::optional<FlverGeometry> DecodeFlverGeometry(std::span<const std::byte> byte
             if (!ok) return BodyFail(error, "index data runs past the file");
             raw.push_back(value);
         }
+        const auto range_first = static_cast<std::uint32_t>(g.indices.size());
         AppendTriangles(raw, fs->triangle_strip, vb->vertex_count, restart, base, g.indices,
                         g.bad_indices);
+        g.ranges.push_back({range_first, static_cast<std::uint32_t>(g.indices.size()) - range_first,
+                            mesh.material_index});
+        if (uv_member) ++g.meshes_with_uvs;
         (fs->triangle_strip ? g.strip_sets : g.list_sets) += 1;
         ++g.meshes_decoded;
     }
