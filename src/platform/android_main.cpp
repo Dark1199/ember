@@ -13,7 +13,12 @@
 #include <thread>
 #include <vector>
 
+#include <fstream>
+#include <sstream>
+#include <thread>
+
 #include "app/engine.h"
+#include "app/settings.h"
 #include "core/crash.h"
 #include "core/log.h"
 #include "gfx/renderer.h"
@@ -23,6 +28,7 @@ namespace {
 struct AppState {
     ember::gfx::Renderer renderer;
     ember::app::Engine engine;
+    ember::app::Settings settings;
     std::thread startup;       // mounts the game files off the render/event thread
     bool instance_ready = false;
     bool running = false;      // between APP_CMD_RESUME and APP_CMD_PAUSE
@@ -92,6 +98,15 @@ void AttachWindow(android_app* app, AppState& state) {
         state.fallback_drawn = true;
         return;
     }
+    // Resolution scale: ask the window for a smaller buffer; the compositor scales it up to the
+    // screen. Must happen before the swapchain exists, which then reports the smaller extent.
+    if (state.settings.resolution_scale_percent < 100) {
+        const int w = ANativeWindow_getWidth(app->window), h = ANativeWindow_getHeight(app->window);
+        const auto size = ember::app::ScaleResolution(w, h, state.settings.resolution_scale_percent);
+        const int rc = ANativeWindow_setBuffersGeometry(app->window, size.width, size.height, 0);
+        EMBER_LOG("Resolution scale %d%%: window %dx%d -> buffers %dx%d (result %d)",
+                  state.settings.resolution_scale_percent, w, h, size.width, size.height, rc);
+    }
     const VkAndroidSurfaceCreateInfoKHR info{
         .sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR,
         .window = app->window,
@@ -154,6 +169,15 @@ void android_main(android_app* app) {
               internal ? internal : "(null)");
 
     AppState state;
+    {
+        std::ifstream in(files_dir / "settings.txt");
+        std::stringstream text;
+        text << in.rdbuf();
+        state.settings = ember::app::ParseSettings(text.str());
+        EMBER_LOG("Settings (%s): resolution scale %d%%, frame cap %d, shadows %s",
+                  in ? "settings.txt" : "defaults", state.settings.resolution_scale_percent,
+                  state.settings.frame_cap, state.settings.shadows ? "on" : "off");
+    }
     app->userData = &state;
     app->onAppCmd = OnCommand;
 
@@ -207,6 +231,12 @@ void android_main(android_app* app) {
         // The window may have arrived while the app was already resumed.
         AttachWindow(app, state);
 
+        // Frame cap: wait out the rest of the frame time instead of drawing early.
+        if (state.settings.frame_cap > 0 && CanDraw(state)) {
+            const auto frame_time = std::chrono::duration<double>(1.0 / state.settings.frame_cap);
+            const auto due = last + std::chrono::duration_cast<std::chrono::steady_clock::duration>(frame_time);
+            if (std::chrono::steady_clock::now() < due) std::this_thread::sleep_until(due);
+        }
         const auto now = std::chrono::steady_clock::now();
         const double dt = std::chrono::duration<double>(now - last).count();
         last = now;

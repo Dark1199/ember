@@ -377,6 +377,12 @@ public final class MainActivity extends Activity {
         root.addView(verifyButton, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        final Button settingsButton = makeButton("Settings (resolution, frame cap, shadows)", false);
+        root.addView(settingsButton, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        settingsButton.setOnClickListener(v ->
+                startActivity(new android.content.Intent(this, SettingsActivity.class)));
+
         progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progress.setVisibility(View.GONE);
         root.addView(progress, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,

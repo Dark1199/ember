@@ -15,7 +15,7 @@ jobs:
         run: |
           mkdir -p /tmp/jt
           J=android/app/src/main/java/org/ember/engine
-          javac -Xlint:all -d /tmp/jt $J/ZipInstaller.java $J/LogTail.java tests/java/EmberJavaTests.java
+          javac -Xlint:all -d /tmp/jt $J/ZipInstaller.java $J/LogTail.java $J/SettingsStore.java tests/java/EmberJavaTests.java
           java -cp /tmp/jt org.ember.engine.EmberJavaTests
       - run: cmake -S . -B build -DEMBER_BUILD_TESTS=ON
       - run: cmake --build build

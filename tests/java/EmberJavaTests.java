@@ -142,9 +142,25 @@ public final class EmberJavaTests {
         check(shown.length() < 700, "backlog bounded " + shown.length());
     }
 
+    static void settingsTests() throws IOException {
+        SettingsStore d = SettingsStore.parse("");
+        check(d.resolutionScale == 100 && d.frameCap == 0 && d.shadows, "settings defaults");
+        SettingsStore s = SettingsStore.parse("resolution_scale=50\nframe_cap=30\nshadows=off\nx=1\n");
+        check(s.resolutionScale == 50 && s.frameCap == 30 && !s.shadows, "settings parse");
+        s = SettingsStore.parse("resolution_scale=1\nframe_cap=abc\nshadows=maybe");
+        check(s.resolutionScale == 25 && s.frameCap == 0 && s.shadows, "settings clamp and ignore");
+        File dir = Files.createTempDirectory("ember-settings").toFile();
+        s.resolutionScale = 66; s.frameCap = 45; s.shadows = false;
+        s.save(dir);
+        SettingsStore back = SettingsStore.load(dir);
+        check(back.resolutionScale == 66 && back.frameCap == 45 && !back.shadows, "settings round trip");
+        check(SettingsStore.load(new File(dir, "missing")).resolutionScale == 100, "settings missing dir");
+    }
+
     public static void main(String[] args) throws Exception {
         installerTests();
         tailTests();
+        settingsTests();
         System.out.println("EmberJavaTests: ok");
     }
 }
