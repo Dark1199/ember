@@ -99,4 +99,40 @@ inline Mat4 OrbitMvp(const float bounds_min[3], const float bounds_max[3], float
     return Multiply(PreRotation(pre_rotation_quarter_turns), Multiply(proj, view));
 }
 
+/// First-person style camera: yaw 0 looks along -z, positive yaw turns toward +x.
+struct FreeFly {
+    std::array<float, 3> position{0, 0, 0};
+    float yaw = 0.0f;
+    float pitch = 0.0f;
+
+    [[nodiscard]] std::array<float, 3> Forward() const {
+        return {std::sin(yaw) * std::cos(pitch), std::sin(pitch), -std::cos(yaw) * std::cos(pitch)};
+    }
+    [[nodiscard]] std::array<float, 3> Right() const { return {std::cos(yaw), 0.0f, std::sin(yaw)}; }
+
+    void Look(float d_yaw, float d_pitch) {
+        yaw += d_yaw;
+        pitch = std::clamp(pitch + d_pitch, -1.5f, 1.5f);
+    }
+    /// `forward` and `right` are -1..1 stick values; `speed` is units per second.
+    void Move(float forward, float right, float speed, float dt) {
+        const auto f = Forward();
+        const auto r = Right();
+        for (int i = 0; i < 3; ++i) position[i] += (f[i] * forward + r[i] * right) * speed * dt;
+    }
+    /// Frames `target` from a distance, looking at it.
+    void LookAtPoint(const std::array<float, 3>& from, const std::array<float, 3>& target) {
+        position = from;
+        const float dx = target[0] - from[0], dy = target[1] - from[1], dz = target[2] - from[2];
+        yaw = std::atan2(dx, -dz);
+        pitch = std::atan2(dy, std::sqrt(dx * dx + dz * dz));
+    }
+    [[nodiscard]] Mat4 Mvp(float aspect, float near_plane, float far_plane, int pre_rotation_quarter_turns) const {
+        const auto f = Forward();
+        const std::array<float, 3> target{position[0] + f[0], position[1] + f[1], position[2] + f[2]};
+        return Multiply(PreRotation(pre_rotation_quarter_turns),
+                        Multiply(Perspective(0.9f, aspect, near_plane, far_plane), LookAt(position, target)));
+    }
+};
+
 } // namespace ember::gfx

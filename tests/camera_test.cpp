@@ -48,6 +48,26 @@ int main() {
         const auto h = Apply(PreRotation(2), 1, 0.5f, 0);
         assert(h[0] == -1.0f && h[1] == -0.5f);
     }
+    {   // free-fly: forward at yaw 0 goes toward -z; yaw 90 degrees looks toward +x
+        FreeFly cam;
+        cam.Move(1.0f, 0.0f, 2.0f, 0.5f);
+        assert(std::fabs(cam.position[2] + 1.0f) < 1e-5f && std::fabs(cam.position[0]) < 1e-5f);
+        cam.Move(0.0f, 1.0f, 2.0f, 0.5f); // strafe right at yaw 0 is +x
+        assert(std::fabs(cam.position[0] - 1.0f) < 1e-5f);
+        cam.yaw = 1.5707963f;
+        const auto f = cam.Forward();
+        assert(std::fabs(f[0] - 1.0f) < 1e-5f && std::fabs(f[2]) < 1e-5f);
+        cam.Look(0, 100.0f);
+        assert(cam.pitch <= 1.5f);
+        FreeFly c2;
+        c2.LookAtPoint({0, 2, 10}, {0, 0, 0});
+        const Mat4 mvp = c2.Mvp(1.8f, 0.1f, 100.0f, 0);
+        const auto p = Apply(mvp, 0, 0, 0);
+        assert(p[3] > 0 && std::fabs(p[0] / p[3]) < 1e-4f && std::fabs(p[1] / p[3]) < 1e-4f);
+        assert(p[2] / p[3] > 0 && p[2] / p[3] < 1);
+        const auto behind = Apply(mvp, 0, 0, 30.0f);
+        assert(behind[3] < 0); // behind the camera
+    }
     std::puts("camera_test: ok");
     return 0;
 }

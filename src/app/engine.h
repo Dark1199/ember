@@ -10,6 +10,7 @@
 #include "app/model_loader.h"
 #include "gfx/mesh_renderer.h"
 #include "app/settings.h"
+#include "gfx/camera.h"
 #include "gfx/renderer.h"
 #include "gfx/ui_renderer.h"
 #include "ui/menu.h"
@@ -51,6 +52,8 @@ public:
 
     /// A finger went down at (nx, ny), 0..1 of the screen as the user holds it. Render thread.
     void OnTap(float nx, float ny);
+    /// Multi-touch input. `action`: 0 down, 1 move, 2 up/cancel. Coordinates as for OnTap.
+    void OnPointer(int id, int action, float nx, float ny);
     /// The back button. Returns true when the engine used it (otherwise the app may close).
     bool OnBack();
     [[nodiscard]] bool WantsQuit() const noexcept { return menu_.WantsQuit(); }
@@ -91,6 +94,18 @@ private:
     std::size_t archive_count_ = 0;
     std::size_t packed_count_ = 0;
     float aspect_ = 16.0f / 9.0f;
+
+    // Play mode ("sandbox"): free-fly camera over the loaded model. Left half of the screen is a
+    // movement stick, right half turns the view.
+    struct Touch {
+        int id = -1;
+        float origin_x = 0, origin_y = 0, x = 0, y = 0;
+    };
+    gfx::FreeFly camera_;
+    Touch move_touch_, look_touch_;
+    bool was_playing_ = false;
+    float model_radius_ = 1.0f;
+    float model_centre_[3] = {};
     float shown_min_[3] = {};
     float shown_max_[3] = {};
 };

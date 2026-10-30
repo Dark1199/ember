@@ -14,7 +14,7 @@ namespace ember::ui {
 /// rotation; the renderer maps layout units to the framebuffer.
 inline constexpr float kLayoutHeight = 720.0f;
 
-enum class Screen { Title, Menu, Info, Viewer };
+enum class Screen { Title, Menu, Info, Viewer, Play };
 
 struct Rect {
     float x = 0, y = 0, w = 0, h = 0;
@@ -35,7 +35,7 @@ struct MenuInfo {
 /// host. Draw() only fills a UiBatch.
 class Menu {
 public:
-    enum Action { kNone = 0, kQuit = 1 };
+    enum Action { kNone = 0, kQuit = 1, kStartPlay = 2 };
 
     [[nodiscard]] Screen CurrentScreen() const noexcept { return screen_; }
     [[nodiscard]] bool WantsQuit() const noexcept { return quit_; }

@@ -60,7 +60,8 @@ int main() {
         menu.OnTap(0.5f, 0.5f, aspect, info); // any tap leaves the title
         assert(menu.CurrentScreen() == Screen::Menu);
         const auto buttons = menu.Buttons(aspect, info);
-        assert(buttons.size() == 3);
+        assert(buttons.size() == 4);
+        assert(buttons[0].rect.w <= 240.0f && buttons[0].rect.h <= 44.0f); // compact targets
         const float width = kLayoutHeight * aspect;
         for (size_t i = 0; i < buttons.size(); ++i) {
             const Rect& r = buttons[i].rect;
@@ -71,7 +72,7 @@ int main() {
             nx = (r.x + r.w / 2) / width; ny = (r.y + r.h / 2) / kLayoutHeight;
         };
         float nx, ny;
-        centre(buttons[1].rect, nx, ny); // STATUS
+        centre(buttons[2].rect, nx, ny); // STATUS
         menu.OnTap(nx, ny, aspect, info);
         assert(menu.CurrentScreen() == Screen::Info);
         centre(menu.Buttons(aspect, info)[0].rect, nx, ny); // BACK
@@ -86,13 +87,20 @@ int main() {
         assert(menu.CurrentScreen() == Screen::Menu);
         menu.OnTap(0.01f, 0.99f, aspect, info); // empty corner
         assert(menu.CurrentScreen() == Screen::Menu && !menu.WantsQuit());
-        centre(buttons[2].rect, nx, ny);
+        centre(buttons[1].rect, nx, ny); // NEW GAME
+        assert(menu.OnTap(nx, ny, aspect, info) == Menu::kStartPlay && menu.CurrentScreen() == Screen::Play);
+        assert(menu.Buttons(aspect, info).size() == 1 && menu.OnBack() && menu.CurrentScreen() == Screen::Menu);
+        centre(buttons[1].rect, nx, ny);
+        menu.OnTap(nx, ny, aspect, none); // no model: stays in the menu
+        assert(menu.CurrentScreen() == Screen::Menu);
+        centre(buttons[3].rect, nx, ny);
         assert(menu.OnTap(nx, ny, aspect, info) == Menu::kQuit && menu.WantsQuit());
         // drawing every screen stays inside the batch limit and produces geometry
-        for (const Screen sc : {Screen::Title, Screen::Menu, Screen::Info, Screen::Viewer}) {
+        for (const Screen sc : {Screen::Title, Screen::Menu, Screen::Info, Screen::Viewer, Screen::Play}) {
             Menu m2;
             if (sc != Screen::Title) m2.OnTap(0.5f, 0.5f, aspect, info);
-            if (sc == Screen::Info) { auto b = m2.Buttons(aspect, info); centre(b[1].rect, nx, ny); m2.OnTap(nx, ny, aspect, info); }
+            if (sc == Screen::Info) { auto b = m2.Buttons(aspect, info); centre(b[2].rect, nx, ny); m2.OnTap(nx, ny, aspect, info); }
+            if (sc == Screen::Play) { auto b = m2.Buttons(aspect, info); centre(b[1].rect, nx, ny); m2.OnTap(nx, ny, aspect, info); }
             if (sc == Screen::Viewer) { auto b = m2.Buttons(aspect, info); centre(b[0].rect, nx, ny); m2.OnTap(nx, ny, aspect, info); }
             assert(m2.CurrentScreen() == sc);
             info.lines = {"GPU: ADRENO 612", "RESOLUTION SCALE: 50%"};

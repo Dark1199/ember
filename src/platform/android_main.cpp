@@ -138,13 +138,26 @@ void AttachWindow(android_app* app, AppState& state) {
 
 int32_t OnInput(android_app* app, AInputEvent* event) {
     auto& state = *static_cast<AppState*>(app->userData);
-    if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_MOTION) {
-        if ((AMotionEvent_getAction(event) & AMOTION_EVENT_ACTION_MASK) == AMOTION_EVENT_ACTION_DOWN &&
-            state.screen_w > 0 && state.screen_h > 0) {
-            state.engine.OnTap(AMotionEvent_getX(event, 0) / static_cast<float>(state.screen_w),
-                               AMotionEvent_getY(event, 0) / static_cast<float>(state.screen_h));
-            return 1;
+    if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_MOTION && state.screen_w > 0 && state.screen_h > 0) {
+        const int32_t raw = AMotionEvent_getAction(event);
+        const int32_t kind = raw & AMOTION_EVENT_ACTION_MASK;
+        const auto norm_x = [&](size_t i) { return AMotionEvent_getX(event, i) / static_cast<float>(state.screen_w); };
+        const auto norm_y = [&](size_t i) { return AMotionEvent_getY(event, i) / static_cast<float>(state.screen_h); };
+        if (kind == AMOTION_EVENT_ACTION_MOVE) {
+            for (size_t i = 0; i < AMotionEvent_getPointerCount(event); ++i) {
+                state.engine.OnPointer(AMotionEvent_getPointerId(event, i), 1, norm_x(i), norm_y(i));
+            }
+        } else if (kind == AMOTION_EVENT_ACTION_DOWN || kind == AMOTION_EVENT_ACTION_POINTER_DOWN ||
+                   kind == AMOTION_EVENT_ACTION_UP || kind == AMOTION_EVENT_ACTION_POINTER_UP ||
+                   kind == AMOTION_EVENT_ACTION_CANCEL) {
+            const size_t index = kind == AMOTION_EVENT_ACTION_POINTER_DOWN || kind == AMOTION_EVENT_ACTION_POINTER_UP
+                                     ? static_cast<size_t>((raw & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK) >>
+                                                           AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT)
+                                     : 0;
+            const bool down = kind == AMOTION_EVENT_ACTION_DOWN || kind == AMOTION_EVENT_ACTION_POINTER_DOWN;
+            state.engine.OnPointer(AMotionEvent_getPointerId(event, index), down ? 0 : 2, norm_x(index), norm_y(index));
         }
+        return 1;
     } else if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_KEY &&
                AKeyEvent_getKeyCode(event) == AKEYCODE_BACK) {
         // Acted on at key-up; at the title screen the key is left to the system (closes the app).

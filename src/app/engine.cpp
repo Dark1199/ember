@@ -36,6 +36,9 @@ bool Engine::Startup(const Config& config) {
         }
     } done{loading_};
     settings_ = config.settings;
+    // World probe: does the archive hold the files a world loader would start from? Paths follow
+    // community documentation of the PC release; only existence is checked (nothing is parsed).
+    // Reported after mounting below.
     EMBER_LOG("Game root: %s", config.game_root.string().c_str());
     const auto started = std::chrono::steady_clock::now();
     std::string error;
@@ -61,6 +64,18 @@ bool Engine::Startup(const Config& config) {
     // Boot is done here: mounting only reads the small index files (about 10 ms for the four
     // archives). Entry tables of bundles are read when a bundle is opened, so nothing else has to
     // be analysed up front, and no cache is needed.
+    {
+        const char* const candidates[] = {"/map/MapStudio/m10_00_00_00.msb", "/map/MapStudio/m10_01_00_00.msb",
+                                          "/map/MapStudio/m12_00_00_00.msb", "/param/GameParam/GameParam.parambnd",
+                                          "/param/GameParam/GameParam.parambnd.dcx", "/event/common.emevd",
+                                          "/event/m10_00_00_00.emevd", "/event/m10_00_00_00.emevd.dcx"};
+        std::string hits, misses;
+        for (const char* path : candidates) {
+            (vfs_.Exists(path) ? hits : misses) += std::string(path) + " ";
+        }
+        EMBER_LOG("world probe: present: %s| absent: %s", hits.empty() ? "(none) " : hits.c_str(),
+                  misses.empty() ? "(none)" : misses.c_str());
+    }
     game_found_.store(true);
     if (!config.verify_archives) {
         loading_.store(false);
@@ -146,6 +161,40 @@ void Engine::OnTap(float nx, float ny) {
     menu_.OnTap(nx, ny, aspect_, info);
 }
 
+void Engine::OnPointer(int id, int action, float nx, float ny) {
+    const bool playing = menu_.CurrentScreen() == ui::Screen::Play;
+    if (action == 0) {
+        if (playing) {
+            // Buttons first; anything else becomes a stick or look touch.
+            const ui::MenuInfo info = MakeInfo(game_found_.load(), loading_.load(), model_uploaded_, settings_,
+                                               archive_count_, packed_count_, texture_count_, model_description_);
+            const float lx = nx * ui::kLayoutHeight * aspect_, ly = ny * ui::kLayoutHeight;
+            for (const auto& b : menu_.Buttons(aspect_, info)) {
+                if (b.rect.Contains(lx, ly)) {
+                    menu_.OnTap(nx, ny, aspect_, info);
+                    return;
+                }
+            }
+            Touch& t = nx < 0.5f ? move_touch_ : look_touch_;
+            if (t.id < 0) t = {id, nx, ny, nx, ny};
+        } else {
+            OnTap(nx, ny);
+        }
+    } else if (action == 1) {
+        if (look_touch_.id == id) {
+            camera_.Look((nx - look_touch_.x) * aspect_ * 2.6f, -(ny - look_touch_.y) * 2.6f);
+            look_touch_.x = nx;
+            look_touch_.y = ny;
+        } else if (move_touch_.id == id) {
+            move_touch_.x = nx;
+            move_touch_.y = ny;
+        }
+    } else {
+        if (look_touch_.id == id) look_touch_ = {};
+        if (move_touch_.id == id) move_touch_ = {};
+    }
+}
+
 bool Engine::OnBack() {
     return menu_.OnBack();
 }
@@ -205,6 +254,13 @@ bool Engine::Frame(gfx::Renderer& renderer, double dt_seconds) {
                 }
                 EMBER_LOG("textures bound to %zu of %zu materials", bound, model->material_texture_keys.size());
                 texture_count_ = textures.size();
+                for (int i = 0; i < 3; ++i) model_centre_[i] = (model->bounds_min[i] + model->bounds_max[i]) * 0.5f;
+                float r2 = 0.0f;
+                for (int i = 0; i < 3; ++i) {
+                    const float half = (model->bounds_max[i] - model->bounds_min[i]) * 0.5f;
+                    r2 += half * half;
+                }
+                model_radius_ = std::max(std::sqrt(r2), 0.5f);
                 model_uploaded_ = true;
                 EMBER_LOG("mesh uploaded: %zu vertices, %zu indices", model->positions.size() / 3,
                           model->indices.size());
@@ -227,8 +283,38 @@ bool Engine::Frame(gfx::Renderer& renderer, double dt_seconds) {
     const bool ui_on = ui_renderer_.Ready();
     const ui::MenuInfo menu_info = MakeInfo(game_found_.load(), loading_.load(), model_uploaded_, settings_,
                                             archive_count_, packed_count_, texture_count_, model_description_);
+    const bool playing = menu_.CurrentScreen() == ui::Screen::Play && model_uploaded_;
+    if (playing && !was_playing_) {
+        // Entering play: start outside the model, looking at its centre.
+        camera_.LookAtPoint({model_centre_[0], model_centre_[1] + model_radius_ * 0.4f,
+                             model_centre_[2] + model_radius_ * 1.8f},
+                            {model_centre_[0], model_centre_[1], model_centre_[2]});
+        move_touch_ = look_touch_ = {};
+    }
+    was_playing_ = playing;
+    if (playing && move_touch_.id >= 0) {
+        const float dx = std::clamp((move_touch_.x - move_touch_.origin_x) * aspect_ / 0.12f, -1.0f, 1.0f);
+        const float dy = std::clamp((move_touch_.y - move_touch_.origin_y) / 0.12f, -1.0f, 1.0f);
+        camera_.Move(-dy, dx, model_radius_ * 0.6f, static_cast<float>(dt_seconds));
+    }
     batch_.Clear();
-    if (ui_on) menu_.Draw(batch_, aspect_, menu_info);
+    if (ui_on) {
+        menu_.Draw(batch_, aspect_, menu_info);
+        if (playing) {
+            const float w = ui::kLayoutHeight * aspect_;
+            const auto text = [&](const char* t, float y) {
+                batch_.AddText(t, (w - ui::UiBatch::TextWidth(t, 2.0f)) / 2, y, 2.0f, ui::Rgba(160, 148, 138));
+            };
+            text("SANDBOX: FREE CAMERA OVER THE LOADED MODEL (NOT GAMEPLAY)", 24.0f);
+            text("LEFT HALF: MOVE   RIGHT HALF: LOOK", 44.0f);
+            if (move_touch_.id >= 0) { // stick: base and knob
+                const float bx = move_touch_.origin_x * w, by = move_touch_.origin_y * ui::kLayoutHeight;
+                batch_.AddFrame(bx - 40, by - 40, 80, 80, 2.0f, ui::Rgba(232, 101, 10, 160));
+                batch_.AddRect(move_touch_.x * w - 14, move_touch_.y * ui::kLayoutHeight - 14, 28, 28,
+                               ui::Rgba(232, 101, 10, 200));
+            }
+        }
+    }
     const bool show_mesh = model_uploaded_ && mesh_.Ready();
     if (show_mesh) {
         renderer.SetClearColor(0.05f, 0.05f, 0.07f);
@@ -242,7 +328,8 @@ bool Engine::Frame(gfx::Renderer& renderer, double dt_seconds) {
             const float w = static_cast<float>(ctx.extent.width), h = static_cast<float>(ctx.extent.height);
             // With a quarter-turn pre-rotation the image is stored sideways relative to the display.
             const float aspect = (turns & 1) ? h / w : w / h;
-            const gfx::Mat4 mvp = gfx::OrbitMvp(shown_min_, shown_max_, static_cast<float>(t), aspect, turns);
+            const gfx::Mat4 mvp = playing ? camera_.Mvp(aspect, model_radius_ * 0.01f, model_radius_ * 12.0f, turns)
+                                          : gfx::OrbitMvp(shown_min_, shown_max_, static_cast<float>(t), aspect, turns);
             mesh_.Draw(ctx, mvp.data(), shown_min_[1], shown_max_[1]);
         }
         if (ui_on) {
