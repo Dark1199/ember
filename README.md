@@ -44,6 +44,10 @@ The app opens on a small launcher screen built from plain Android views:
   `verify_result.txt` (the launcher shows it under the title) because `ember.log` is replaced on
   every launch.
 
+- `src/formats/msb.*` map block files (model and parts tables; layout in `docs/formats/msb.md`).
+  Written from documented layout, tested on synthetic files only; the engine logs one `msb:` line
+  per map block at startup so the layout can be checked against real files.
+
 The icon is an original flame mark drawn for this project. No game artwork is shipped (see
 CLEANROOM.md).
 

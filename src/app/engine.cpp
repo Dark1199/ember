@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "core/log.h"
+#include "formats/msb.h"
 #include "gfx/camera.h"
 #include "ui/font.h"
 #include "vfs/survey.h"
@@ -75,6 +76,23 @@ bool Engine::Startup(const Config& config) {
         }
         EMBER_LOG("world probe: present: %s| absent: %s", hits.empty() ? "(none) " : hits.c_str(),
                   misses.empty() ? "(none)" : misses.c_str());
+        // Parse every map block that is present. One summary line each lets the layout notes in
+        // docs/formats/msb.md be checked against the real files from the device log alone.
+        for (const char* path : {"/map/MapStudio/m10_00_00_00.msb", "/map/MapStudio/m10_01_00_00.msb",
+                                 "/map/MapStudio/m12_00_00_00.msb"}) {
+            if (!vfs_.Exists(path)) continue;
+            std::string msb_error;
+            const auto bytes = vfs_.ReadAllDecoded(path, &msb_error);
+            if (!bytes) {
+                EMBER_WARN("msb: %s unreadable: %s", path, msb_error.c_str());
+                continue;
+            }
+            if (const auto msb = formats::ParseMsb(*bytes, &msb_error)) {
+                EMBER_LOG("msb: %s: %s", path, formats::SummarizeMsb(*msb).c_str());
+            } else {
+                EMBER_WARN("%s: %s", path, msb_error.c_str());
+            }
+        }
     }
     game_found_.store(true);
     if (!config.verify_archives) {

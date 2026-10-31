@@ -323,7 +323,41 @@ public final class MainActivity extends Activity {
         b.setAllCaps(false);
         b.setTextColor(primary ? Color.BLACK : TEXT);
         b.setBackgroundColor(primary ? ACCENT : SURFACE);
+        b.setTextSize(13);
+        b.setMinHeight(0);
+        b.setMinimumHeight(0);
+        b.setPadding(dp(8), dp(6), dp(8), dp(6));
         return b;
+    }
+
+    /**
+     * Compact button width for the current window: about half the window width, so the buttons no
+     * longer stretch across wide or tall screens, but never narrower than a readable label or
+     * wider than a comfortable touch target. Recomputed whenever the layout changes (rotation,
+     * split screen), so it follows the aspect ratio instead of a hard-coded size.
+     */
+    private int compactButtonWidth(int windowWidthPx, int windowHeightPx) {
+        final float aspect = windowHeightPx > 0 ? (float) windowWidthPx / windowHeightPx : 0.5f;
+        // Portrait (aspect < 1): half the width. Landscape: half of what a portrait window of the
+        // same height would give, so a wide window does not grow the buttons with it.
+        final float basis = aspect < 1f ? windowWidthPx : windowHeightPx * 0.46f;
+        return Math.max(dp(150), Math.min(dp(220), Math.round(basis * 0.5f)));
+    }
+
+    private void applyCompactButtons(LinearLayout column, int windowWidthPx, int windowHeightPx) {
+        final int w = compactButtonWidth(windowWidthPx, windowHeightPx);
+        final int h = dp(40);
+        for (int i = 0; i < column.getChildCount(); i++) {
+            final View child = column.getChildAt(i);
+            if (child instanceof Button) {
+                final LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) child.getLayoutParams();
+                if (lp.width != w || lp.height != h) {
+                    lp.width = w;
+                    lp.height = h;
+                    child.setLayoutParams(lp);
+                }
+            }
+        }
     }
 
     private void buildUi() {
@@ -358,30 +392,27 @@ public final class MainActivity extends Activity {
         root.addView(header);
 
         final LinearLayout buttons = new LinearLayout(this);
-        buttons.setOrientation(LinearLayout.HORIZONTAL);
+        buttons.setOrientation(LinearLayout.VERTICAL);
+        buttons.setGravity(Gravity.CENTER_HORIZONTAL);
         buttons.setPadding(0, dp(16), 0, dp(8));
         pickButton = makeButton("Install game .zip", false);
         launchButton = makeButton("Launch", true);
         cancelButton = makeButton("Cancel", false);
         cancelButton.setVisibility(View.GONE);
-        final LinearLayout.LayoutParams weight =
-                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        weight.setMargins(0, 0, dp(8), 0);
-        buttons.addView(pickButton, weight);
-        buttons.addView(cancelButton, weight);
-        buttons.addView(launchButton, new LinearLayout.LayoutParams(0,
-                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        root.addView(buttons);
-
-        verifyButton = makeButton("Verify installed files (slow: full check of all game data)", false);
-        root.addView(verifyButton, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        final Button settingsButton = makeButton("Settings (resolution, frame cap, shadows)", false);
-        root.addView(settingsButton, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        verifyButton = makeButton("Verify files (slow)", false);
+        final Button settingsButton = makeButton("Settings", false);
+        for (Button b : new Button[] {launchButton, pickButton, cancelButton, verifyButton, settingsButton}) {
+            final LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, dp(40));
+            lp.setMargins(0, 0, 0, dp(8));
+            buttons.addView(b, lp);
+        }
+        root.addView(buttons, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
         settingsButton.setOnClickListener(v ->
                 startActivity(new android.content.Intent(this, SettingsActivity.class)));
+        root.addOnLayoutChangeListener((v, l, t, r, bt, ol, ot, or, ob) ->
+                applyCompactButtons(buttons, r - l, bt - t));
 
         progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progress.setVisibility(View.GONE);
