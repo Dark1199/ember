@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "core/log.h"
+#include "app/world_loader.h"
 #include "formats/msb.h"
 #include "gfx/camera.h"
 #include "ui/font.h"
@@ -37,6 +38,7 @@ bool Engine::Startup(const Config& config) {
         }
     } done{loading_};
     settings_ = config.settings;
+    boot_to_world_ = config.boot_to_world;
     // World probe: does the archive hold the files a world loader would start from? Paths follow
     // community documentation of the PC release; only existence is checked (nothing is parsed).
     // Reported after mounting below.
@@ -124,22 +126,60 @@ bool Engine::Startup(const Config& config) {
                   std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
     }
 
-    // First mesh: find the first model that decodes cleanly and hand it to the render thread. The
-    // summary line says how many files were examined and why candidates were rejected, so if
-    // nothing is shown the log still says what the real data looked like.
-    std::string summary;
-    auto model = FindFirstModel(vfs_.Archives(), 8.0, &summary);
-    EMBER_LOG("model search: %s", summary.c_str());
+    // World first: load a whole map block from its MSB. Every step reports into the log (counters,
+    // the first unresolved model names with the paths tried) because the model file naming is not
+    // verified yet. If no map block yields anything, fall back to the first clean single model.
+    std::optional<LoadedModel> model;
+    std::vector<std::string> wanted_textures;
+    std::uint32_t texture_max_dimension = 1024;
+    float world_start[3] = {};
+    bool world_loaded = false;
+    if (config.boot_to_world) {
+        WorldOptions options;
+        for (const char* path : {"/map/MapStudio/m10_01_00_00.msb", "/map/MapStudio/m10_00_00_00.msb",
+                                 "/map/MapStudio/m12_00_00_00.msb"}) {
+            if (!vfs_.Exists(path)) continue;
+            std::string world_summary;
+            auto world = LoadWorld(vfs_, path, options, &world_summary);
+            EMBER_LOG("world: %s", world_summary.c_str());
+            world_summary_ = world_summary;
+            if (!world) continue;
+            EMBER_LOG("world: %s; %zu vertices, %zu triangles, %zu texture keys, start (%.0f %.0f %.0f)",
+                      world->model.description.c_str(), world->model.positions.size() / 3,
+                      world->model.indices.size() / 3, world->hot_textures.size(), world->start[0],
+                      world->start[1], world->start[2]);
+            wanted_textures = world->hot_textures;
+            if (wanted_textures.size() > 90) wanted_textures.resize(90); // renderer slot budget
+            texture_max_dimension = 512;                                  // memory: ~1.4 MB each
+            for (int i = 0; i < 3; ++i) world_start[i] = world->start[i];
+            model = std::move(world->model);
+            world_loaded = true;
+            break;
+        }
+    }
+    if (!model) {
+        if (config.boot_to_world) EMBER_WARN("world: no map block loaded; falling back to a single model");
+        // Find the first model that decodes cleanly. The summary line says how many files were
+        // examined and why candidates were rejected, so if nothing is shown the log still says
+        // what the real data looked like.
+        std::string summary;
+        model = FindFirstModel(vfs_.Archives(), 8.0, &summary);
+        EMBER_LOG("model search: %s", summary.c_str());
+        if (model) wanted_textures = model->material_texture_keys;
+    }
     if (model) {
         EMBER_LOG("model: %s", model->description.c_str());
         model_description_ = model->description;
         std::string tex_summary;
-        auto textures = FindTextures(vfs_.Archives(), model->material_texture_keys, 10.0, &tex_summary);
+        auto textures = FindTextures(vfs_.Archives(), wanted_textures, world_loaded ? 25.0 : 10.0,
+                                     &tex_summary, texture_max_dimension);
         EMBER_LOG("textures: %s", tex_summary.c_str());
         {
             std::lock_guard<std::mutex> lock(model_mutex_);
             pending_model_ = std::move(model);
             pending_textures_ = std::move(textures);
+            pending_world_ = world_loaded;
+            for (int i = 0; i < 3; ++i) pending_world_start_[i] = world_start[i];
         }
         model_ready_.store(true);
     } else {
@@ -241,6 +281,8 @@ bool Engine::Frame(gfx::Renderer& renderer, double dt_seconds) {
             model = std::move(pending_model_);
             textures = std::move(pending_textures_);
             pending_model_.reset();
+            world_mode_ = pending_world_;
+            for (int i = 0; i < 3; ++i) world_start_[i] = pending_world_start_[i];
         }
         if (model) {
             std::string error;
@@ -279,6 +321,17 @@ bool Engine::Frame(gfx::Renderer& renderer, double dt_seconds) {
                     r2 += half * half;
                 }
                 model_radius_ = std::max(std::sqrt(r2), 0.5f);
+                if (world_mode_) {
+                    // A map block is hundreds of metres across: a walking-pace-plus fly speed and a
+                    // near plane that does not clip the floor, instead of values scaled to its size.
+                    cam_near_ = 0.3f;
+                    cam_far_ = 1500.0f;
+                    cam_speed_ = 25.0f;
+                } else {
+                    cam_near_ = model_radius_ * 0.01f;
+                    cam_far_ = model_radius_ * 12.0f;
+                    cam_speed_ = model_radius_ * 0.6f;
+                }
                 model_uploaded_ = true;
                 EMBER_LOG("mesh uploaded: %zu vertices, %zu indices", model->positions.size() / 3,
                           model->indices.size());
@@ -301,8 +354,16 @@ bool Engine::Frame(gfx::Renderer& renderer, double dt_seconds) {
     const bool ui_on = ui_renderer_.Ready();
     const ui::MenuInfo menu_info = MakeInfo(game_found_.load(), loading_.load(), model_uploaded_, settings_,
                                             archive_count_, packed_count_, texture_count_, model_description_);
+    if (boot_to_world_ && world_mode_ && model_uploaded_ && !auto_entered_) {
+        auto_entered_ = true; // boot straight into the world; BACK still opens the menu
+        menu_.EnterPlay();
+    }
     const bool playing = menu_.CurrentScreen() == ui::Screen::Play && model_uploaded_;
-    if (playing && !was_playing_) {
+    if (playing && !was_playing_ && world_mode_) {
+        camera_.LookAtPoint({world_start_[0], world_start_[1] + 20.0f, world_start_[2]},
+                            {world_start_[0], world_start_[1] + 10.0f, world_start_[2] - 40.0f});
+        move_touch_ = look_touch_ = {};
+    } else if (playing && !was_playing_) {
         // Entering play: start outside the model, looking at its centre.
         camera_.LookAtPoint({model_centre_[0], model_centre_[1] + model_radius_ * 0.4f,
                              model_centre_[2] + model_radius_ * 1.8f},
@@ -313,7 +374,7 @@ bool Engine::Frame(gfx::Renderer& renderer, double dt_seconds) {
     if (playing && move_touch_.id >= 0) {
         const float dx = std::clamp((move_touch_.x - move_touch_.origin_x) * aspect_ / 0.12f, -1.0f, 1.0f);
         const float dy = std::clamp((move_touch_.y - move_touch_.origin_y) / 0.12f, -1.0f, 1.0f);
-        camera_.Move(-dy, dx, model_radius_ * 0.6f, static_cast<float>(dt_seconds));
+        camera_.Move(-dy, dx, cam_speed_, static_cast<float>(dt_seconds));
     }
     batch_.Clear();
     if (ui_on) {
@@ -323,7 +384,8 @@ bool Engine::Frame(gfx::Renderer& renderer, double dt_seconds) {
             const auto text = [&](const char* t, float y) {
                 batch_.AddText(t, (w - ui::UiBatch::TextWidth(t, 2.0f)) / 2, y, 2.0f, ui::Rgba(160, 148, 138));
             };
-            text("SANDBOX: FREE CAMERA OVER THE LOADED MODEL (NOT GAMEPLAY)", 24.0f);
+            text(world_mode_ ? "WORLD VIEWER: FREE CAMERA OVER THE MAP (NO GAMEPLAY YET)"
+                             : "SANDBOX: FREE CAMERA OVER THE LOADED MODEL (NOT GAMEPLAY)", 24.0f);
             text("LEFT HALF: MOVE   RIGHT HALF: LOOK", 44.0f);
             if (move_touch_.id >= 0) { // stick: base and knob
                 const float bx = move_touch_.origin_x * w, by = move_touch_.origin_y * ui::kLayoutHeight;
@@ -346,7 +408,7 @@ bool Engine::Frame(gfx::Renderer& renderer, double dt_seconds) {
             const float w = static_cast<float>(ctx.extent.width), h = static_cast<float>(ctx.extent.height);
             // With a quarter-turn pre-rotation the image is stored sideways relative to the display.
             const float aspect = (turns & 1) ? h / w : w / h;
-            const gfx::Mat4 mvp = playing ? camera_.Mvp(aspect, model_radius_ * 0.01f, model_radius_ * 12.0f, turns)
+            const gfx::Mat4 mvp = playing ? camera_.Mvp(aspect, cam_near_, cam_far_, turns)
                                           : gfx::OrbitMvp(shown_min_, shown_max_, static_cast<float>(t), aspect, turns);
             mesh_.Draw(ctx, mvp.data(), shown_min_[1], shown_max_[1]);
         }

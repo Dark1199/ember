@@ -109,6 +109,17 @@ int main() {
             assert(!b.Vertices().empty() && b.Vertices().size() % 6 == 0);
         }
     }
+    { // EnterPlay skips the title and menu, but never leaves another screen
+        Menu m;
+        m.EnterPlay();
+        assert(m.CurrentScreen() == Screen::Play);
+        assert(m.OnBack() && m.CurrentScreen() == Screen::Menu);
+        Menu v;
+        MenuInfo info; info.model_ready = true;
+        v.OnTap(0.5f, 0.5f, 16.0f / 9.0f, info); // title -> menu
+        v.EnterPlay();
+        assert(v.CurrentScreen() == Screen::Play);
+    }
     std::puts("ui_test: ok");
     return 0;
 }

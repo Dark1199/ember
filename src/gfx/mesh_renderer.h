@@ -72,7 +72,7 @@ private:
                        std::string* error);
     void DestroyTexture(VkDevice device, Texture& texture);
 
-    static constexpr std::uint32_t kMaxTextures = 48;
+    static constexpr std::uint32_t kMaxTextures = 96;
 
     VkDescriptorSetLayout set_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool pool_ = VK_NULL_HANDLE;

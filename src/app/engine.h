@@ -26,6 +26,9 @@ struct Config {
     /// Where the verification result is written (empty: not written).
     std::filesystem::path verify_report;
     Settings settings;
+    /// Load a whole map block from its MSB and start in the free camera inside it. When no map
+    /// can be loaded the engine falls back to showing the first clean model it finds.
+    bool boot_to_world = true;
 };
 
 /// Picks the game directory. `external_files_dir` is the app's private external storage
@@ -80,6 +83,8 @@ private:
     std::mutex model_mutex_;
     std::optional<LoadedModel> pending_model_;
     std::vector<LoadedTexture> pending_textures_;
+    bool pending_world_ = false;
+    float pending_world_start_[3] = {};
     std::atomic<bool> model_ready_{false};
     bool model_uploaded_ = false;
     bool pipeline_failed_ = false;
@@ -108,6 +113,14 @@ private:
     float model_centre_[3] = {};
     float shown_min_[3] = {};
     float shown_max_[3] = {};
+
+    // World boot: set by the worker thread together with the pending model.
+    bool boot_to_world_ = false;
+    bool world_mode_ = false;      ///< the uploaded mesh is a map block, not a single model
+    bool auto_entered_ = false;    ///< the boot already switched to play once
+    float world_start_[3] = {};
+    std::string world_summary_;
+    float cam_near_ = 0.1f, cam_far_ = 100.0f, cam_speed_ = 1.0f;
 };
 
 } // namespace ember::app

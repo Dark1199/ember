@@ -26,50 +26,26 @@ std::string TextureKey(const std::string& path) {
     return name;
 }
 
-namespace {
-
-constexpr std::uint32_t kMinTriangles = 1500;
-constexpr std::uint32_t kMaxTriangles = 80000;
-constexpr std::uint32_t kMaxEntryBytes = 8u << 20;
-
-struct Counters {
-    std::size_t entries_read = 0, dcx = 0, flver_files = 0, header_fail = 0, body_fail = 0,
-                geom_fail = 0, too_small = 0, too_big = 0, unclean = 0;
-    std::string first_problem;
-};
-
-std::optional<LoadedModel> TryModel(std::span<const std::byte> bytes, const std::string& where,
-                                    Counters& c) {
-    ++c.flver_files;
+std::optional<LoadedModel> DecodeFlverModel(std::span<const std::byte> bytes, const std::string& where,
+                                            std::string* error, FlverFailure* failure) {
+    const auto fail = [&](FlverFailure f, const std::string& why) -> std::optional<LoadedModel> {
+        if (failure) *failure = f;
+        if (error) *error = why;
+        return std::nullopt;
+    };
     std::string err;
     const auto header = formats::ParseFlverHeader(bytes, &err);
-    if (!header || header->mesh_count == 0) {
-        if (!header) {
-            ++c.header_fail;
-            if (c.first_problem.empty()) c.first_problem = err;
-        }
-        return std::nullopt;
-    }
+    if (!header) return fail(FlverFailure::Header, err);
+    if (header->mesh_count == 0) return fail(FlverFailure::NoMeshes, "no meshes");
     const auto body = formats::ParseFlverBody(bytes, *header, &err);
-    if (!body) {
-        ++c.body_fail;
-        if (c.first_problem.empty()) c.first_problem = err;
-        return std::nullopt;
-    }
+    if (!body) return fail(FlverFailure::Body, err);
     auto geometry = formats::DecodeFlverGeometry(bytes, *header, *body, &err);
-    if (!geometry) {
-        ++c.geom_fail;
-        if (c.first_problem.empty()) c.first_problem = err;
-        return std::nullopt;
-    }
+    if (!geometry) return fail(FlverFailure::Geometry, err);
     const std::size_t triangles = geometry->indices.size() / 3;
-    if (triangles < kMinTriangles) { ++c.too_small; return std::nullopt; }
-    if (triangles > kMaxTriangles) { ++c.too_big; return std::nullopt; }
     const std::uint64_t components = 3ull * geometry->vertex_count;
     if (geometry->bad_indices != 0 || geometry->non_finite_vertices != 0 ||
         geometry->outside_bounds_components * 100 > components) {
-        ++c.unclean;
-        return std::nullopt;
+        return fail(FlverFailure::Unclean, "geometry failed the cleanliness checks");
     }
     LoadedModel model;
     model.description = where + ": " + std::to_string(geometry->meshes_decoded) + " meshes, " +
@@ -97,6 +73,45 @@ std::optional<LoadedModel> TryModel(std::span<const std::byte> bytes, const std:
         model.bounds_min[i] = header->bounds_min[i];
         model.bounds_max[i] = header->bounds_max[i];
     }
+    if (failure) *failure = FlverFailure::None;
+    return model;
+}
+
+namespace {
+
+constexpr std::uint32_t kMinTriangles = 1500;
+constexpr std::uint32_t kMaxTriangles = 80000;
+constexpr std::uint32_t kMaxEntryBytes = 8u << 20;
+
+struct Counters {
+    std::size_t entries_read = 0, dcx = 0, flver_files = 0, header_fail = 0, body_fail = 0,
+                geom_fail = 0, too_small = 0, too_big = 0, unclean = 0;
+    std::string first_problem;
+};
+
+std::optional<LoadedModel> TryModel(std::span<const std::byte> bytes, const std::string& where,
+                                    Counters& c) {
+    ++c.flver_files;
+    std::string err;
+    FlverFailure why = FlverFailure::None;
+    auto model = DecodeFlverModel(bytes, where, &err, &why);
+    if (!model) {
+        switch (why) {
+        case FlverFailure::Header: ++c.header_fail; break;
+        case FlverFailure::Body: ++c.body_fail; break;
+        case FlverFailure::Geometry: ++c.geom_fail; break;
+        case FlverFailure::Unclean: ++c.unclean; break;
+        case FlverFailure::NoMeshes:
+        case FlverFailure::None: break;
+        }
+        if (why != FlverFailure::NoMeshes && why != FlverFailure::Unclean && c.first_problem.empty()) {
+            c.first_problem = err;
+        }
+        return std::nullopt;
+    }
+    const std::size_t triangles = model->indices.size() / 3;
+    if (triangles < kMinTriangles) { ++c.too_small; return std::nullopt; }
+    if (triangles > kMaxTriangles) { ++c.too_big; return std::nullopt; }
     return model;
 }
 
@@ -166,7 +181,8 @@ namespace ember::app {
 
 std::vector<LoadedTexture> FindTextures(const std::vector<vfs::Bhd5Archive>& archives,
                                         const std::vector<std::string>& wanted_keys,
-                                        double time_budget_seconds, std::string* summary) {
+                                        double time_budget_seconds, std::string* summary,
+                                        std::uint32_t max_dimension) {
     const auto started = std::chrono::steady_clock::now();
     const auto elapsed = [&] {
         return std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
@@ -217,7 +233,7 @@ std::vector<LoadedTexture> FindTextures(const std::vector<vfs::Bhd5Archive>& arc
                 }
                 std::uint32_t skip = 0;
                 for (std::uint32_t w = info->width, h = info->height;
-                     (w > 1024 || h > 1024) && skip + 1 < info->mip_count; w /= 2, h /= 2) {
+                     (w > max_dimension || h > max_dimension) && skip + 1 < info->mip_count; w /= 2, h /= 2) {
                     ++skip;
                 }
                 auto levels = formats::DecodeDds(*bytes, *info, 12, &err, skip);

@@ -17,7 +17,7 @@ else()
 endif()
 
 add_library(ember_core STATIC src/vfs/vfs.cpp src/vfs/bhd5.cpp src/vfs/dcx.cpp src/vfs/bnd.cpp
-    src/vfs/survey.cpp src/formats/flver.cpp src/formats/msb.cpp src/formats/dds.cpp src/formats/tpf.cpp src/vfs/tpf_scan.cpp src/app/model_loader.cpp src/app/settings.cpp
+    src/vfs/survey.cpp src/formats/flver.cpp src/formats/msb.cpp src/formats/dds.cpp src/formats/tpf.cpp src/vfs/tpf_scan.cpp src/app/model_loader.cpp src/app/world_loader.cpp src/app/settings.cpp
     src/ui/font.cpp src/ui/ui_batch.cpp src/ui/menu.cpp)
 target_link_libraries(ember_core PUBLIC ${EMBER_ZLIB})
 target_include_directories(ember_core PUBLIC src)
@@ -48,6 +48,9 @@ if(EMBER_BUILD_TESTS)
     add_executable(msb_test tests/msb_test.cpp)
     target_link_libraries(msb_test PRIVATE ember_core)
     add_test(NAME msb_test COMMAND msb_test)
+    add_executable(world_test tests/world_test.cpp)
+    target_link_libraries(world_test PRIVATE ember_core)
+    add_test(NAME world_test COMMAND world_test)
     add_executable(texture_test tests/texture_test.cpp)
     target_link_libraries(texture_test PRIVATE ember_core)
     add_test(NAME texture_test COMMAND texture_test)

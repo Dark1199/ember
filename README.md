@@ -48,6 +48,12 @@ The app opens on a small launcher screen built from plain Android views:
   Written from documented layout, tested on synthetic files only; the engine logs one `msb:` line
   per map block at startup so the layout can be checked against real files.
 
+- `src/app/world_loader.*` boot path: parses a map block's MSB, resolves each map piece's model file,
+  bakes every placed instance into one mesh grouped by texture, and the engine starts straight in
+  the free camera inside it (BACK opens the menu). Model file naming and the rotation order are
+  unverified assumptions; the log's `world:` lines report what resolved. Falls back to the single-model
+  sandbox when no map loads. There is no gameplay, collision, lighting model or audio yet.
+
 The icon is an original flame mark drawn for this project. No game artwork is shipped (see
 CLEANROOM.md).
 

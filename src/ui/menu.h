@@ -45,6 +45,12 @@ public:
     /// A finger went down at (nx, ny) in 0..1 screen coordinates. Returns what happened.
     Action OnTap(float nx, float ny, float aspect, const MenuInfo& info);
 
+    /// Skips the title and menu and goes straight to play (used when the engine boots into the
+    /// loaded world). Does nothing once a screen other than the title or menu is showing.
+    void EnterPlay() noexcept {
+        if (screen_ == Screen::Title || screen_ == Screen::Menu) screen_ = Screen::Play;
+    }
+
     /// The Android back button / gesture. Returns true when it was used (not at the title).
     bool OnBack();
 
